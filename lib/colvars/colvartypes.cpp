@@ -1,36 +1,11 @@
 // -*- c++ -*-
 
-// This file is part of the Collective Variables module (Colvars).
-// The original version of Colvars and its updates are located at:
-// https://github.com/colvars/colvars
-// Please update all Colvars source files before making any changes.
-// If you wish to distribute your changes, please submit them to the
-// Colvars repository at GitHub.
-
-#include <cstdlib>
-#include <cstring>
+#include <stdlib.h>
+#include <string.h>
 
 #include "colvarmodule.h"
 #include "colvartypes.h"
 #include "colvarparse.h"
-
-
-bool      colvarmodule::rotation::monitor_crossings = false;
-cvm::real colvarmodule::rotation::crossing_threshold = 1.0E-02;
-
-
-namespace  {
-
-/// Numerical recipes diagonalization
-static int jacobi(cvm::real **a, cvm::real *d, cvm::real **v, int *nrot);
-
-/// Eigenvector sort
-static int eigsrt(cvm::real *d, cvm::real **v);
-
-/// Transpose the matrix
-static int transpose(cvm::real **v);
-
-}
 
 
 std::string cvm::rvector::to_simple_string() const
@@ -248,11 +223,13 @@ cvm::quaternion::position_derivative_inner(cvm::rvector const &pos,
 // Seok C, Dill KA.  Using quaternions to calculate RMSD.  J Comput
 // Chem. 25(15):1849-57 (2004) DOI: 10.1002/jcc.20110 PubMed: 15376254
 
-void colvarmodule::rotation::build_correlation_matrix(
-                                        std::vector<cvm::atom_pos> const &pos1,
-                                        std::vector<cvm::atom_pos> const &pos2)
+void colvarmodule::rotation::build_matrix(std::vector<cvm::atom_pos> const &pos1,
+                                          std::vector<cvm::atom_pos> const &pos2,
+                                          cvm::matrix2d<cvm::real>         &S)
 {
   // build the correlation matrix
+  C.resize(3, 3);
+  C.reset();
   size_t i;
   for (i = 0; i < pos1.size(); i++) {
     C.xx() += pos1[i].x * pos2[i].x;
@@ -265,11 +242,7 @@ void colvarmodule::rotation::build_correlation_matrix(
     C.zy() += pos1[i].z * pos2[i].y;
     C.zz() += pos1[i].z * pos2[i].z;
   }
-}
 
-
-void colvarmodule::rotation::compute_overlap_matrix()
-{
   // build the "overlap" matrix, whose eigenvectors are stationary
   // points of the RMSD in the space of rotations
   S[0][0] =    C.xx() + C.yy() + C.zz();
@@ -291,38 +264,32 @@ void colvarmodule::rotation::compute_overlap_matrix()
 }
 
 
-void colvarmodule::rotation::diagonalize_matrix(
-                                            cvm::matrix2d<cvm::real> &m,
-                                            cvm::vector1d<cvm::real> &eigval,
-                                            cvm::matrix2d<cvm::real> &eigvec)
+void colvarmodule::rotation::diagonalize_matrix(cvm::matrix2d<cvm::real> &S,
+                                                cvm::vector1d<cvm::real> &S_eigval,
+                                                cvm::matrix2d<cvm::real> &S_eigvec)
 {
-  eigval.resize(4);
-  eigval.reset();
-  eigvec.resize(4, 4);
-  eigvec.reset();
+  S_eigval.resize(4);
+  S_eigval.reset();
+  S_eigvec.resize(4,4);
+  S_eigvec.reset();
 
   // diagonalize
   int jac_nrot = 0;
-  if (jacobi(m.c_array(), eigval.c_array(), eigvec.c_array(), &jac_nrot) !=
-      COLVARS_OK) {
-    cvm::error("Too many iterations in routine jacobi.\n"
-               "This is usually the result of an ill-defined set of atoms for "
-               "rotational alignment (RMSD, rotateReference, etc).\n");
-  }
-  eigsrt(eigval.c_array(), eigvec.c_array());
+  jacobi(S.c_array(), S_eigval.c_array(), S_eigvec.c_array(), &jac_nrot);
+  eigsrt(S_eigval.c_array(), S_eigvec.c_array());
   // jacobi saves eigenvectors by columns
-  transpose(eigvec.c_array());
+  transpose(S_eigvec.c_array());
 
   // normalize eigenvectors
   for (size_t ie = 0; ie < 4; ie++) {
     cvm::real norm2 = 0.0;
     size_t i;
     for (i = 0; i < 4; i++) {
-      norm2 += eigvec[ie][i] * eigvec[ie][i];
+      norm2 += std::pow(S_eigvec[ie][i], int(2));
     }
-    cvm::real const norm = cvm::sqrt(norm2);
+    cvm::real const norm = std::sqrt(norm2);
     for (i = 0; i < 4; i++) {
-      eigvec[ie][i] /= norm;
+      S_eigvec[ie][i] /= norm;
     }
   }
 }
@@ -330,26 +297,25 @@ void colvarmodule::rotation::diagonalize_matrix(
 
 // Calculate the rotation, plus its derivatives
 
-void colvarmodule::rotation::calc_optimal_rotation(
-                                        std::vector<cvm::atom_pos> const &pos1,
-                                        std::vector<cvm::atom_pos> const &pos2)
+void colvarmodule::rotation::calc_optimal_rotation(std::vector<cvm::atom_pos> const &pos1,
+                                                   std::vector<cvm::atom_pos> const &pos2)
 {
-  C.resize(3, 3);
-  C.reset();
-  build_correlation_matrix(pos1, pos2);
-
-  S.resize(4, 4);
+  S.resize(4,4);
   S.reset();
-  compute_overlap_matrix();
 
-  S_backup.resize(4, 4);
+  build_matrix(pos1, pos2, S);
+
+  S_backup.resize(4,4);
   S_backup = S;
 
-  if (b_debug_gradients) {
-    cvm::log("S     = "+cvm::to_str(S_backup, cvm::cv_width, cvm::cv_prec)+"\n");
+  if (cvm::debug()) {
+    if (b_debug_gradients) {
+      cvm::log("S     = "+cvm::to_str(cvm::to_str(S_backup), cvm::cv_width, cvm::cv_prec)+"\n");
+    }
   }
 
   diagonalize_matrix(S, S_eigval, S_eigvec);
+
   // eigenvalues and eigenvectors
   cvm::real const L0 = S_eigval[0];
   cvm::real const L1 = S_eigval[1];
@@ -363,34 +329,34 @@ void colvarmodule::rotation::calc_optimal_rotation(
   lambda = L0;
   q = Q0;
 
-  if (cvm::rotation::monitor_crossings) {
-    if (q_old.norm2() > 0.0) {
-      q.match(q_old);
-      if (q_old.inner(q) < (1.0 - crossing_threshold)) {
-        cvm::log("Warning: one molecular orientation has changed by more than "+
-                 cvm::to_str(crossing_threshold)+": discontinuous rotation ?\n");
-      }
+  if (q_old.norm2() > 0.0) {
+    q.match(q_old);
+    if (q_old.inner(q) < (1.0 - crossing_threshold)) {
+      cvm::log("Warning: one molecular orientation has changed by more than "+
+               cvm::to_str(crossing_threshold)+": discontinuous rotation ?\n");
     }
-    q_old = q;
   }
+  q_old = q;
 
-  if (b_debug_gradients) {
-    cvm::log("L0 = "+cvm::to_str(L0, cvm::cv_width, cvm::cv_prec)+
-             ", Q0 = "+cvm::to_str(Q0, cvm::cv_width, cvm::cv_prec)+
-             ", Q0*Q0 = "+cvm::to_str(Q0.inner(Q0), cvm::cv_width, cvm::cv_prec)+
-             "\n");
-    cvm::log("L1 = "+cvm::to_str(L1, cvm::cv_width, cvm::cv_prec)+
-             ", Q1 = "+cvm::to_str(Q1, cvm::cv_width, cvm::cv_prec)+
-             ", Q0*Q1 = "+cvm::to_str(Q0.inner(Q1), cvm::cv_width, cvm::cv_prec)+
-             "\n");
-    cvm::log("L2 = "+cvm::to_str(L2, cvm::cv_width, cvm::cv_prec)+
-             ", Q2 = "+cvm::to_str(Q2, cvm::cv_width, cvm::cv_prec)+
-             ", Q0*Q2 = "+cvm::to_str(Q0.inner(Q2), cvm::cv_width, cvm::cv_prec)+
-             "\n");
-    cvm::log("L3 = "+cvm::to_str(L3, cvm::cv_width, cvm::cv_prec)+
-             ", Q3 = "+cvm::to_str(Q3, cvm::cv_width, cvm::cv_prec)+
-             ", Q0*Q3 = "+cvm::to_str(Q0.inner(Q3), cvm::cv_width, cvm::cv_prec)+
-             "\n");
+  if (cvm::debug()) {
+    if (b_debug_gradients) {
+      cvm::log("L0 = "+cvm::to_str(L0, cvm::cv_width, cvm::cv_prec)+
+               ", Q0 = "+cvm::to_str(Q0, cvm::cv_width, cvm::cv_prec)+
+               ", Q0*Q0 = "+cvm::to_str(Q0.inner(Q0), cvm::cv_width, cvm::cv_prec)+
+               "\n");
+      cvm::log("L1 = "+cvm::to_str(L1, cvm::cv_width, cvm::cv_prec)+
+               ", Q1 = "+cvm::to_str(Q1, cvm::cv_width, cvm::cv_prec)+
+               ", Q0*Q1 = "+cvm::to_str(Q0.inner(Q1), cvm::cv_width, cvm::cv_prec)+
+               "\n");
+      cvm::log("L2 = "+cvm::to_str(L2, cvm::cv_width, cvm::cv_prec)+
+               ", Q2 = "+cvm::to_str(Q2, cvm::cv_width, cvm::cv_prec)+
+               ", Q0*Q2 = "+cvm::to_str(Q0.inner(Q2), cvm::cv_width, cvm::cv_prec)+
+               "\n");
+      cvm::log("L3 = "+cvm::to_str(L3, cvm::cv_width, cvm::cv_prec)+
+               ", Q3 = "+cvm::to_str(Q3, cvm::cv_width, cvm::cv_prec)+
+               ", Q0*Q3 = "+cvm::to_str(Q0.inner(Q3), cvm::cv_width, cvm::cv_prec)+
+               "\n");
+    }
   }
 
   // calculate derivatives of L0 and Q0 with respect to each atom in
@@ -500,43 +466,47 @@ void colvarmodule::rotation::calc_optimal_rotation(
       }
     }
 
-    if (b_debug_gradients) {
+    if (cvm::debug()) {
 
-      cvm::matrix2d<cvm::real> S_new(4, 4);
-      cvm::vector1d<cvm::real> S_new_eigval(4);
-      cvm::matrix2d<cvm::real> S_new_eigvec(4, 4);
+      if (b_debug_gradients) {
 
-      // make an infitesimal move along each cartesian coordinate of
-      // this atom, and solve again the eigenvector problem
-      for (size_t comp = 0; comp < 3; comp++) {
+        cvm::matrix2d<cvm::real> S_new(4, 4);
+        cvm::vector1d<cvm::real> S_new_eigval(4);
+        cvm::matrix2d<cvm::real> S_new_eigvec(4, 4);
 
-        S_new = S_backup;
-        // diagonalize the new overlap matrix
-        for (size_t i = 0; i < 4; i++) {
-          for (size_t j = 0; j < 4; j++) {
-            S_new[i][j] +=
-              colvarmodule::debug_gradients_step_size * ds_2[i][j][comp];
+        // make an infitesimal move along each cartesian coordinate of
+        // this atom, and solve again the eigenvector problem
+        for (size_t comp = 0; comp < 3; comp++) {
+
+          S_new = S_backup;
+          // diagonalize the new overlap matrix
+          for (size_t i = 0; i < 4; i++) {
+            for (size_t j = 0; j < 4; j++) {
+              S_new[i][j] +=
+                colvarmodule::debug_gradients_step_size * ds_2[i][j][comp];
+            }
           }
+
+          //           cvm::log("S_new = "+cvm::to_str(cvm::to_str (S_new), cvm::cv_width, cvm::cv_prec)+"\n");
+
+          diagonalize_matrix(S_new, S_new_eigval, S_new_eigvec);
+
+          cvm::real const &L0_new = S_new_eigval[0];
+          cvm::quaternion const Q0_new(S_new_eigvec[0]);
+
+          cvm::real const DL0 = (dl0_2[comp]) * colvarmodule::debug_gradients_step_size;
+          cvm::quaternion const q0(Q0);
+          cvm::quaternion const DQ0(dq0_2[0][comp] * colvarmodule::debug_gradients_step_size,
+                                    dq0_2[1][comp] * colvarmodule::debug_gradients_step_size,
+                                    dq0_2[2][comp] * colvarmodule::debug_gradients_step_size,
+                                    dq0_2[3][comp] * colvarmodule::debug_gradients_step_size);
+
+          cvm::log(  "|(l_0+dl_0) - l_0^new|/l_0 = "+
+                     cvm::to_str(std::fabs(L0+DL0 - L0_new)/L0, cvm::cv_width, cvm::cv_prec)+
+                     ", |(q_0+dq_0) - q_0^new| = "+
+                     cvm::to_str((Q0+DQ0 - Q0_new).norm(), cvm::cv_width, cvm::cv_prec)+
+                     "\n");
         }
-
-        //           cvm::log("S_new = "+cvm::to_str(cvm::to_str (S_new), cvm::cv_width, cvm::cv_prec)+"\n");
-
-        diagonalize_matrix(S_new, S_new_eigval, S_new_eigvec);
-
-        cvm::real const &L0_new = S_new_eigval[0];
-        cvm::quaternion const Q0_new(S_new_eigvec[0]);
-
-        cvm::real const DL0 = (dl0_2[comp]) * colvarmodule::debug_gradients_step_size;
-        cvm::quaternion const DQ0(dq0_2[0][comp] * colvarmodule::debug_gradients_step_size,
-                                  dq0_2[1][comp] * colvarmodule::debug_gradients_step_size,
-                                  dq0_2[2][comp] * colvarmodule::debug_gradients_step_size,
-                                  dq0_2[3][comp] * colvarmodule::debug_gradients_step_size);
-
-        cvm::log(  "|(l_0+dl_0) - l_0^new|/l_0 = "+
-                   cvm::to_str(cvm::fabs(L0+DL0 - L0_new)/L0, cvm::cv_width, cvm::cv_prec)+
-                   ", |(q_0+dq_0) - q_0^new| = "+
-                   cvm::to_str((Q0+DQ0 - Q0_new).norm(), cvm::cv_width, cvm::cv_prec)+
-                   "\n");
       }
     }
   }
@@ -553,10 +523,7 @@ void colvarmodule::rotation::calc_optimal_rotation(
 
 #define n 4
 
-
-namespace {
-
-int jacobi(cvm::real **a, cvm::real *d, cvm::real **v, int *nrot)
+void jacobi(cvm::real **a, cvm::real *d, cvm::real **v, int *nrot)
 {
   int j,iq,ip,i;
   cvm::real tresh,theta,tau,t,sm,s,h,g,c;
@@ -579,10 +546,10 @@ int jacobi(cvm::real **a, cvm::real *d, cvm::real **v, int *nrot)
     sm=0.0;
     for (ip=0;ip<n-1;ip++) {
       for (iq=ip+1;iq<n;iq++)
-        sm += cvm::fabs(a[ip][iq]);
+        sm += std::fabs(a[ip][iq]);
     }
     if (sm == 0.0) {
-      return COLVARS_OK;
+      return;
     }
     if (i < 4)
       tresh=0.2*sm/(n*n);
@@ -590,20 +557,20 @@ int jacobi(cvm::real **a, cvm::real *d, cvm::real **v, int *nrot)
       tresh=0.0;
     for (ip=0;ip<n-1;ip++) {
       for (iq=ip+1;iq<n;iq++) {
-        g=100.0*cvm::fabs(a[ip][iq]);
-        if (i > 4 && (cvm::real)(cvm::fabs(d[ip])+g) == (cvm::real)cvm::fabs(d[ip])
-            && (cvm::real)(cvm::fabs(d[iq])+g) == (cvm::real)cvm::fabs(d[iq]))
+        g=100.0*std::fabs(a[ip][iq]);
+        if (i > 4 && (cvm::real)(std::fabs(d[ip])+g) == (cvm::real)std::fabs(d[ip])
+            && (cvm::real)(std::fabs(d[iq])+g) == (cvm::real)std::fabs(d[iq]))
           a[ip][iq]=0.0;
-        else if (cvm::fabs(a[ip][iq]) > tresh) {
+        else if (std::fabs(a[ip][iq]) > tresh) {
           h=d[iq]-d[ip];
-          if ((cvm::real)(cvm::fabs(h)+g) == (cvm::real)cvm::fabs(h))
+          if ((cvm::real)(std::fabs(h)+g) == (cvm::real)std::fabs(h))
             t=(a[ip][iq])/h;
           else {
             theta=0.5*h/(a[ip][iq]);
-            t=1.0/(cvm::fabs(theta)+cvm::sqrt(1.0+theta*theta));
+            t=1.0/(std::fabs(theta)+std::sqrt(1.0+theta*theta));
             if (theta < 0.0) t = -t;
           }
-          c=1.0/cvm::sqrt(1+t*t);
+          c=1.0/std::sqrt(1+t*t);
           s=t*c;
           tau=s/(1.0+c);
           h=t*a[ip][iq];
@@ -634,11 +601,10 @@ int jacobi(cvm::real **a, cvm::real *d, cvm::real **v, int *nrot)
       z[ip]=0.0;
     }
   }
-  return COLVARS_ERROR;
+  cvm::error("Too many iterations in routine jacobi.\n");
 }
 
-
-int eigsrt(cvm::real *d, cvm::real **v)
+void eigsrt(cvm::real *d, cvm::real **v)
 {
   int k,j,i;
   cvm::real p;
@@ -657,11 +623,9 @@ int eigsrt(cvm::real *d, cvm::real **v)
       }
     }
   }
-  return COLVARS_OK;
 }
 
-
-int transpose(cvm::real **v)
+void transpose(cvm::real **v)
 {
   cvm::real p;
   int i,j;
@@ -672,9 +636,6 @@ int transpose(cvm::real **v)
       v[j][i]=p;
     }
   }
-  return COLVARS_OK;
-}
-
 }
 
 #undef n

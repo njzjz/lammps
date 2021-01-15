@@ -1,11 +1,4 @@
-// -*- c++ -*-
-
-// This file is part of the Collective Variables module (Colvars).
-// The original version of Colvars and its updates are located at:
-// https://github.com/colvars/colvars
-// Please update all Colvars source files before making any changes.
-// If you wish to distribute your changes, please submit them to the
-// Colvars repository at GitHub.
+/// -*- c++ -*-
 
 #ifndef COLVARCOMP_H
 #define COLVARCOMP_H
@@ -20,58 +13,55 @@
 // simple_scalar_dist_functions (derived_class)
 
 
+#include <fstream>
+#include <cmath>
+
+
 #include "colvarmodule.h"
 #include "colvar.h"
 #include "colvaratoms.h"
 
-#if (__cplusplus >= 201103L)
-#include "colvar_geometricpath.h"
-#include <functional>
-#endif // C++11 checking
 
-#include <map>
-
-
-/// \brief Colvar component (base class for collective variables)
+/// \brief Colvar component (base class); most implementations of
+/// \link cvc \endlink utilize one or more \link
+/// colvarmodule::atom \endlink or \link colvarmodule::atom_group
+/// \endlink objects to access atoms.
 ///
-/// A \link colvar::cvc \endlink object (or an object of a
-/// cvc-derived class) implements the calculation of a collective
-/// variable, its gradients and any other related physical quantities
-/// that depend on microscopic degrees of freedom.
+/// A \link cvc \endlink object (or an object of a
+/// cvc-derived class) specifies how to calculate a collective
+/// variable, its gradients and other related physical quantities
+/// which do not depend only on the numeric value (the \link colvar
+/// \endlink class already serves this purpose).
 ///
-/// No restriction is set to what kind of calculation a \link colvar::cvc \endlink
-/// object performs (usually an analytical function of atomic coordinates).
-/// The only constraints are that: \par
-///
-/// - The value is calculated by the \link calc_value() \endlink
-///   method, and is an object of \link colvarvalue \endlink class.  This
-///   provides a transparent way to treat scalar and non-scalar variables
-///   alike, and allows an automatic selection of the applicable algorithms.
-///
-/// - The object provides an implementation \link apply_force() \endlink to
-///   apply forces to atoms.  Typically, one or more \link colvarmodule::atom_group
-///   \endlink objects are used, but this is not a requirement for as long as
-///   the \link colvar::cvc \endlink object communicates with the simulation program.
+/// No restriction is set to what kind of calculation a \link
+/// cvc \endlink object performs (usually calculate an
+/// analytical function of atomic coordinates).  The only constraint
+/// is that the value calculated is implemented as a \link colvarvalue
+/// \endlink object.  This serves to provide a unique way to calculate
+/// scalar and non-scalar collective variables, and specify if and how
+/// they can be combined together by the parent \link colvar \endlink
+/// object.
 ///
 /// <b> If you wish to implement a new collective variable component, you
 /// should write your own class by inheriting directly from \link
-/// colvar::cvc \endlink, or one of its derived classes (for instance,
-/// \link colvar::distance \endlink is frequently used, because it provides
+/// cvc \endlink, or one of its derived classes (for instance,
+/// \link distance \endlink is frequently used, because it provides
 /// useful data and function members for any colvar based on two
-/// atom groups).</b>
+/// atom groups).  The steps are: \par
+/// 1. add the name of this class under colvar.h \par
+/// 2. add a call to the parser in colvar.C, within the function colvar::colvar() \par
+/// 3. declare the class in colvarcomp.h \par
+/// 4. implement the class in one of the files colvarcomp_*.C
 ///
-/// The steps are: \par
-/// 1. Declare the new class as a derivative of \link colvar::cvc \endlink
-///    in the file \link colvarcomp.h \endlink
-/// 2. Implement the new class in a file named colvarcomp_<something>.cpp
-/// 3. Declare the name of the new class inside the \link colvar \endlink class
-///    in \link colvar.h \endlink (see "list of available components")
-/// 4. Add a call for the new class in colvar::init_components()
-////   (file: colvar.cpp)
-///
+/// </b>
+/// The cvm::atom and cvm::atom_group classes are available to
+/// transparently communicate with the simulation program.  However,
+/// they are not strictly needed, as long as all the degrees of
+/// freedom associated to the cvc are properly evolved by a simple
+/// call to e.g. apply_force().
 
 class colvar::cvc
-  : public colvarparse, public colvardeps
+  : public colvarparse
 {
 public:
 
@@ -82,23 +72,17 @@ public:
   /// \brief Description of the type of collective variable
   ///
   /// Normally this string is set by the parent \link colvar \endlink
-  /// object within its constructor, when all \link colvar::cvc \endlink
+  /// object within its constructor, when all \link cvc \endlink
   /// objects are initialized; therefore the main "config string"
-  /// constructor does not need to define it.  If a \link colvar::cvc
+  /// constructor does not need to define it.  If a \link cvc
   /// \endlink is initialized and/or a different constructor is used,
   /// this variable definition should be set within the constructor.
   std::string function_type;
-
-  /// Keyword used in the input to denote this CVC
-  std::string config_key;
 
   /// \brief Coefficient in the polynomial combination (default: 1.0)
   cvm::real sup_coeff;
   /// \brief Exponent in the polynomial combination (default: 1)
   int       sup_np;
-
-  /// \brief Is this a periodic component?
-  bool b_periodic;
 
   /// \brief Period of this cvc value, (default: 0.0, non periodic)
   cvm::real period;
@@ -106,80 +90,55 @@ public:
   /// \brief If the component is periodic, wrap around this value (default: 0.0)
   cvm::real wrap_center;
 
+  bool b_periodic;
+
   /// \brief Constructor
   ///
-  /// Calls the init() function of the class
+  /// At least one constructor which reads a string should be defined
+  /// for every class inheriting from cvc \param conf Contents
+  /// of the configuration file pertaining to this \link cvc
+  /// \endlink
   cvc(std::string const &conf);
-
-  /// An init function should be defined for every class inheriting from cvc
-  /// \param conf Contents of the configuration file pertaining to this \link
-  /// cvc \endlink
-  virtual int init(std::string const &conf);
-
-  /// \brief Initialize dependency tree
-  virtual int init_dependencies();
 
   /// \brief Within the constructor, make a group parse its own
   /// options from the provided configuration string
-  /// Returns reference to new group
-  cvm::atom_group *parse_group(std::string const &conf,
-                               char const *group_key,
-                               bool optional = false);
+  void parse_group(std::string const &conf,
+                   char const *group_key,
+                   cvm::atom_group &group,
+                   bool optional = false);
 
-  /// \brief Parse options pertaining to total force calculation
-  virtual int init_total_force_params(std::string const &conf);
-
-  /// \brief After construction, set data related to dependency handling
-  int setup();
-
-  /// \brief Default constructor (used when \link colvar::cvc \endlink
+  /// \brief Default constructor (used when \link cvc \endlink
   /// objects are declared within other ones)
   cvc();
 
   /// Destructor
   virtual ~cvc();
 
-  /// \brief Implementation of the feature list for colvar
-  static std::vector<feature *> cvc_features;
 
-  /// \brief Implementation of the feature list accessor for colvar
-  virtual const std::vector<feature *> &features() const
-  {
-    return cvc_features;
-  }
-  virtual std::vector<feature *> &modify_features()
-  {
-    return cvc_features;
-  }
-  static void delete_features() {
-    for (size_t i=0; i < cvc_features.size(); i++) {
-      delete cvc_features[i];
-    }
-    cvc_features.clear();
-  }
+  /// \brief If this flag is false (default), inverse gradients
+  /// (derivatives of atom coordinates with respect to x) are
+  /// unavailable; it should be set to true by the constructor of each
+  /// derived object capable of calculating them
+  bool b_inverse_gradients;
 
-  /// \brief Get vector of vectors of atom IDs for all atom groups
-  virtual std::vector<std::vector<int> > get_atom_lists();
-
-  /// \brief Obtain data needed for the calculation for the backend
-  virtual void read_data();
+  /// \brief If this flag is false (default), the Jacobian derivative
+  /// (divergence of the inverse gradients) is unavailable; it should
+  /// be set to true by the constructor of each derived object capable
+  /// of calculating it
+  bool b_Jacobian_derivative;
 
   /// \brief Calculate the variable
   virtual void calc_value() = 0;
 
   /// \brief Calculate the atomic gradients, to be reused later in
   /// order to apply forces
-  virtual void calc_gradients() {}
+  virtual void calc_gradients() = 0;
 
-  /// \brief Calculate the atomic fit gradients
-  void calc_fit_gradients();
+  /// \brief If true, calc_gradients() will call debug_gradients() for every group needed
+  bool b_debug_gradients;
 
   /// \brief Calculate finite-difference gradients alongside the analytical ones, for each Cartesian component
-  virtual void debug_gradients();
-
-  /// \brief Calculate atomic gradients and add them to the corresponding item in gradient vector
-  /// May be overridden by CVCs that do not store their gradients in the classic way, see dihedPC
-  virtual void collect_gradients(std::vector<int> const &atom_ids, std::vector<cvm::rvector> &atomic_gradients);
+  virtual void debug_gradients(cvm::atom_group &group);
 
   /// \brief Calculate the total force from the system using the
   /// inverse atomic gradients
@@ -190,14 +149,17 @@ public:
 
 
   /// \brief Return the previously calculated value
-  colvarvalue const & value() const;
+  virtual colvarvalue const & value() const;
 
-  /// \brief Return the previously calculated total force
-  colvarvalue const & total_force() const;
+  // /// \brief Return const pointer to the previously calculated value
+  // virtual const colvarvalue *p_value() const;
+
+  /// \brief Return the previously calculated system force
+  virtual colvarvalue const & system_force() const;
 
   /// \brief Return the previously calculated divergence of the
   /// inverse atomic gradients
-  colvarvalue const & Jacobian_derivative() const;
+  virtual colvarvalue const & Jacobian_derivative() const;
 
   /// \brief Apply the collective variable force, by communicating the
   /// atomic forces to the simulation program (\b Note: the \link ft
@@ -253,21 +215,12 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 
-  /// \brief Wrap value (for periodic/symmetric cvcs)
-  virtual void wrap(colvarvalue &x_unwrapped) const;
+  /// \brief Wrapp value (for periodic/symmetric cvcs)
+  virtual void wrap(colvarvalue &x) const;
 
   /// \brief Pointers to all atom groups, to let colvars collect info
   /// e.g. atomic gradients
   std::vector<cvm::atom_group *> atom_groups;
-
-  /// \brief Store a pointer to new atom group, and list as child for dependencies
-  inline void register_atom_group(cvm::atom_group *ag) {
-    atom_groups.push_back(ag);
-    add_child(ag);
-  }
-
-  /// \brief Whether or not this CVC will be computed in parallel whenever possible
-  bool b_try_scalable;
 
 protected:
 
@@ -277,7 +230,7 @@ protected:
   /// \brief Value at the previous step
   colvarvalue x_old;
 
-  /// \brief Calculated total force (\b Note: this is calculated from
+  /// \brief Calculated system force (\b Note: this is calculated from
   /// the total atomic forces read from the program, subtracting fromt
   /// the "internal" forces of the system the "external" forces from
   /// the colvar biases)
@@ -289,17 +242,22 @@ protected:
 };
 
 
+
+
 inline colvarvalue const & colvar::cvc::value() const
 {
   return x;
 }
 
+// inline const colvarvalue * colvar::cvc::p_value() const
+// {
+//   return &x;
+// }
 
-inline colvarvalue const & colvar::cvc::total_force() const
+inline colvarvalue const & colvar::cvc::system_force() const
 {
   return ft;
 }
-
 
 inline colvarvalue const & colvar::cvc::Jacobian_derivative() const
 {
@@ -307,26 +265,57 @@ inline colvarvalue const & colvar::cvc::Jacobian_derivative() const
 }
 
 
+inline cvm::real colvar::cvc::dist2(colvarvalue const &x1,
+                                    colvarvalue const &x2) const
+{
+  return x1.dist2(x2);
+}
+
+inline colvarvalue colvar::cvc::dist2_lgrad(colvarvalue const &x1,
+                                            colvarvalue const &x2) const
+{
+  return x1.dist2_grad(x2);
+}
+
+inline colvarvalue colvar::cvc::dist2_rgrad(colvarvalue const &x1,
+                                            colvarvalue const &x2) const
+{
+  return x2.dist2_grad(x1);
+}
+
+inline void colvar::cvc::wrap(colvarvalue &x) const
+{
+  return;
+}
+
 
 /// \brief Colvar component: distance between the centers of mass of
 /// two groups (colvarvalue::type_scalar type, range [0:*))
-
+///
+/// This class also serves as the template for many collective
+/// variables with two atom groups: in this case, the
+/// distance::distance() constructor should be called on the same
+/// configuration string, to make the same member data and functions
+/// available to the derived object
 class colvar::distance
   : public colvar::cvc
 {
 protected:
   /// First atom group
-  cvm::atom_group  *group1;
+  cvm::atom_group  group1;
   /// Second atom group
-  cvm::atom_group  *group2;
+  cvm::atom_group  group2;
   /// Vector distance, cached to be recycled
   cvm::rvector     dist_v;
   /// Use absolute positions, ignoring PBCs when present
   bool b_no_PBC;
+  /// Compute system force on first site only to avoid unwanted
+  /// coupling to other colvars (see e.g. Ciccotti et al., 2005)
+  bool b_1site_force;
 public:
-  distance(std::string const &conf);
+  distance(std::string const &conf, bool twogroups = true);
   distance();
-  virtual ~distance() {}
+  virtual inline ~distance() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -341,7 +330,6 @@ public:
 };
 
 
-
 // \brief Colvar component: distance vector between centers of mass
 // of two groups (\link colvarvalue::type_3vector \endlink type,
 // range (-*:*)x(-*:*)x(-*:*))
@@ -351,7 +339,7 @@ class colvar::distance_vec
 public:
   distance_vec(std::string const &conf);
   distance_vec();
-  virtual ~distance_vec() {}
+  virtual inline ~distance_vec() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -365,7 +353,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: distance unit vector (direction) between
@@ -377,21 +364,17 @@ class colvar::distance_dir
 public:
   distance_dir(std::string const &conf);
   distance_dir();
-  virtual ~distance_dir() {}
+  virtual inline ~distance_dir() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
-  /// Redefined to override the distance ones
   virtual cvm::real dist2(colvarvalue const &x1,
                           colvarvalue const &x2) const;
-  /// Redefined to override the distance ones
   virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
-  /// Redefined to override the distance ones
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: projection of the distance vector along
@@ -401,13 +384,16 @@ class colvar::distance_z
 {
 protected:
   /// Main atom group
-  cvm::atom_group  *main;
+  cvm::atom_group  main;
   /// Reference atom group
-  cvm::atom_group  *ref1;
+  cvm::atom_group  ref1;
   /// Optional, second ref atom group
-  cvm::atom_group  *ref2;
+  cvm::atom_group  ref2;
   /// Use absolute positions, ignoring PBCs when present
   bool b_no_PBC;
+  /// Compute system force on one site only to avoid unwanted
+  /// coupling to other colvars (see e.g. Ciccotti et al., 2005)
+  bool b_1site_force;
   /// Vector on which the distance vector is projected
   cvm::rvector axis;
   /// Norm of the axis
@@ -419,7 +405,7 @@ protected:
 public:
   distance_z(std::string const &conf);
   distance_z();
-  virtual ~distance_z() {}
+  virtual inline ~distance_z() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -432,9 +418,8 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
   /// \brief Redefined to make use of the user-provided period
-  virtual void wrap(colvarvalue &x_unwrapped) const;
+  virtual void wrap(colvarvalue &x) const;
 };
-
 
 
 /// \brief Colvar component: projection of the distance vector on a
@@ -450,7 +435,7 @@ protected:
 public:
   distance_xy(std::string const &conf);
   distance_xy();
-  virtual ~distance_xy() {}
+  virtual inline ~distance_xy() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -465,81 +450,18 @@ public:
 };
 
 
-/// \brief Colvar component: polar coordinate phi of a group
-/// (colvarvalue::type_scalar type, range [-180:180])
-class colvar::polar_phi
-  : public colvar::cvc
-{
-public:
-  polar_phi(std::string const &conf);
-  polar_phi();
-  virtual ~polar_phi() {}
-protected:
-  cvm::atom_group  *atoms;
-  cvm::real r, theta, phi;
-public:
-  virtual void calc_value();
-  virtual void calc_gradients();
-  virtual void apply_force(colvarvalue const &force);
-  /// Redefined to handle the 2*PI periodicity
-  virtual cvm::real dist2(colvarvalue const &x1,
-                          colvarvalue const &x2) const;
-  /// Redefined to handle the 2*PI periodicity
-  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-  /// Redefined to handle the 2*PI periodicity
-  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-  /// Redefined to handle the 2*PI periodicity
-  virtual void wrap(colvarvalue &x_unwrapped) const;
-};
-
-
-/// \brief Colvar component: polar coordinate theta of a group
-/// (colvarvalue::type_scalar type, range [0:180])
-class colvar::polar_theta
-  : public colvar::cvc
-{
-public:
-  polar_theta(std::string const &conf);
-  polar_theta();
-  virtual ~polar_theta() {}
-protected:
-  cvm::atom_group  *atoms;
-  cvm::real r, theta, phi;
-public:
-  virtual void calc_value();
-  virtual void calc_gradients();
-  virtual void apply_force(colvarvalue const &force);
-  /// Redefined to override the distance ones
-  virtual cvm::real dist2(colvarvalue const &x1,
-                          colvarvalue const &x2) const;
-  /// Redefined to override the distance ones
-  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-  /// Redefined to override the distance ones
-  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-};
-
 /// \brief Colvar component: average distance between two groups of atoms, weighted as the sixth power,
 /// as in NMR refinements(colvarvalue::type_scalar type, range (0:*))
 class colvar::distance_inv
-  : public colvar::cvc
+  : public colvar::distance
 {
 protected:
-  /// First atom group
-  cvm::atom_group  *group1;
-  /// Second atom group
-  cvm::atom_group  *group2;
   /// Components of the distance vector orthogonal to the axis
   int exponent;
-  /// Use absolute positions, ignoring PBCs when present
-  bool b_no_PBC;
 public:
   distance_inv(std::string const &conf);
   distance_inv();
-  virtual ~distance_inv() {}
+  virtual inline ~distance_inv() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -550,7 +472,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: N1xN2 vector of pairwise distances
@@ -560,47 +481,24 @@ class colvar::distance_pairs
 {
 protected:
   /// First atom group
-  cvm::atom_group  *group1;
+  cvm::atom_group  group1;
   /// Second atom group
-  cvm::atom_group  *group2;
+  cvm::atom_group  group2;
   /// Use absolute positions, ignoring PBCs when present
   bool b_no_PBC;
 public:
   distance_pairs(std::string const &conf);
   distance_pairs();
-  virtual ~distance_pairs() {}
+  virtual inline ~distance_pairs() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
-};
-
-
-
-/// \brief Colvar component:  dipole magnitude of a molecule
-class colvar::dipole_magnitude
-  : public colvar::cvc
-{
-protected:
-  /// Dipole atom group
-  cvm::atom_group  *atoms;
-  cvm::atom_pos dipoleV;
-public:
-  /// Initialize by parsing the configuration
-  dipole_magnitude (std::string const &conf);
-  dipole_magnitude (cvm::atom const &a1);
-  dipole_magnitude();
-  virtual inline ~dipole_magnitude() {}
-  virtual void calc_value();
-  virtual void calc_gradients();
-  //virtual void calc_force_invgrads();
-  //virtual void calc_Jacobian_derivative();
-  virtual void apply_force (colvarvalue const &force);
-  virtual cvm::real dist2 (colvarvalue const &x1,
-                           colvarvalue const &x2) const;
-  virtual colvarvalue dist2_lgrad (colvarvalue const &x1,
-                                   colvarvalue const &x2) const;
-  virtual colvarvalue dist2_rgrad (colvarvalue const &x1,
-                                   colvarvalue const &x2) const;
+  virtual cvm::real dist2(colvarvalue const &x1,
+                          colvarvalue const &x2) const;
+  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
 };
 
 
@@ -612,12 +510,12 @@ class colvar::gyration
 {
 protected:
   /// Atoms involved
-  cvm::atom_group  *atoms;
+  cvm::atom_group atoms;
 public:
   /// Constructor
   gyration(std::string const &conf);
   gyration();
-  virtual ~gyration() {}
+  virtual inline ~gyration() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -632,7 +530,6 @@ public:
 };
 
 
-
 /// \brief Colvar component: moment of inertia of an atom group
 /// (colvarvalue::type_scalar type, range [0:*))
 class colvar::inertia
@@ -642,7 +539,7 @@ public:
   /// Constructor
   inertia(std::string const &conf);
   inertia();
-  virtual ~inertia() {}
+  virtual inline ~inertia() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -653,7 +550,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: moment of inertia of an atom group
@@ -668,7 +564,7 @@ public:
   /// Constructor
   inertia_z(std::string const &conf);
   inertia_z();
-  virtual ~inertia_z() {}
+  virtual inline ~inertia_z() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -681,7 +577,6 @@ public:
 };
 
 
-
 /// \brief Colvar component: projection of 3N coordinates onto an
 /// eigenvector(colvarvalue::type_scalar type, range (-*:*))
 class colvar::eigenvector
@@ -690,10 +585,13 @@ class colvar::eigenvector
 protected:
 
   /// Atom group
-  cvm::atom_group  *           atoms;
+  cvm::atom_group             atoms;
 
   /// Reference coordinates
   std::vector<cvm::atom_pos>  ref_pos;
+
+  /// Geometric center of the reference coordinates
+  cvm::atom_pos                ref_pos_center;
 
   /// Eigenvector (of a normal or essential mode): will always have zero center
   std::vector<cvm::rvector>   eigenvec;
@@ -705,7 +603,7 @@ public:
 
   /// Constructor
   eigenvector(std::string const &conf);
-  virtual ~eigenvector() {}
+  virtual inline ~eigenvector() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -729,11 +627,11 @@ class colvar::angle
 protected:
 
   /// Atom group
-  cvm::atom_group  *group1;
+  cvm::atom_group group1;
   /// Atom group
-  cvm::atom_group  *group2;
+  cvm::atom_group group2;
   /// Atom group
-  cvm::atom_group  *group3;
+  cvm::atom_group group3;
 
   /// Inter site vectors
   cvm::rvector r21, r23;
@@ -742,7 +640,7 @@ protected:
   /// Derivatives wrt group centers of mass
   cvm::rvector dxdr1, dxdr3;
 
-  /// Compute total force on first site only to avoid unwanted
+  /// Compute system force on first site only to avoid unwanted
   /// coupling to other colvars (see e.g. Ciccotti et al., 2005)
   /// (or to allow dummy atoms)
   bool b_1site_force;
@@ -753,7 +651,7 @@ public:
   /// \brief Initialize the three groups after three atoms
   angle(cvm::atom const &a1, cvm::atom const &a2, cvm::atom const &a3);
   angle();
-  virtual ~angle() {}
+  virtual inline ~angle() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -766,53 +664,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
-
-
-/// \brief Colvar component: angle between the dipole of a molecule and an axis
-/// formed by two groups of atoms(colvarvalue::type_scalar type, range [0:PI])
-class colvar::dipole_angle
-  : public colvar::cvc
-{
-protected:
-
-  /// Dipole atom group
-  cvm::atom_group  *group1;
-  /// Atom group
-  cvm::atom_group  *group2;
-  /// Atom group
-  cvm::atom_group  *group3;
-
-  /// Inter site vectors
-  cvm::rvector r21, r23;
-  /// Inter site vector norms
-  cvm::real r21l, r23l;
-  /// Derivatives wrt group centers of mass
-  cvm::rvector dxdr1, dxdr3;
-
-  /// Compute total force on first site only to avoid unwanted
-  /// coupling to other colvars (see e.g. Ciccotti et al., 2005)
-  /// (or to allow dummy atoms)
-  bool b_1site_force;
-public:
-
-  /// Initialize by parsing the configuration
-  dipole_angle (std::string const &conf);
-  /// \brief Initialize the three groups after three atoms
-  dipole_angle (cvm::atom const &a1, cvm::atom const &a2, cvm::atom const &a3);
-  dipole_angle();
-  virtual ~dipole_angle() {}
-  virtual void calc_value();
-  virtual void calc_gradients();
-  virtual void apply_force (colvarvalue const &force);
-  virtual cvm::real dist2 (colvarvalue const &x1,
-                           colvarvalue const &x2) const;
-  virtual colvarvalue dist2_lgrad (colvarvalue const &x1,
-                                   colvarvalue const &x2) const;
-  virtual colvarvalue dist2_rgrad (colvarvalue const &x1,
-                                   colvarvalue const &x2) const;
-};
-
 
 
 /// \brief Colvar component: dihedral between the centers of mass of
@@ -823,17 +674,17 @@ class colvar::dihedral
 protected:
 
   /// Atom group
-  cvm::atom_group  *group1;
+  cvm::atom_group group1;
   /// Atom group
-  cvm::atom_group  *group2;
+  cvm::atom_group group2;
   /// Atom group
-  cvm::atom_group  *group3;
+  cvm::atom_group group3;
   /// Atom group
-  cvm::atom_group  *group4;
+  cvm::atom_group group4;
   /// Inter site vectors
   cvm::rvector r12, r23, r34;
 
-  /// \brief Compute total force on first site only to avoid unwanted
+  /// \brief Compute system force on first site only to avoid unwanted
   /// coupling to other colvars (see e.g. Ciccotti et al., 2005)
   bool b_1site_force;
 
@@ -844,7 +695,7 @@ public:
   /// \brief Initialize the four groups after four atoms
   dihedral(cvm::atom const &a1, cvm::atom const &a2, cvm::atom const &a3, cvm::atom const &a4);
   dihedral();
-  virtual ~dihedral() {}
+  virtual inline ~dihedral() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -861,139 +712,13 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
   /// Redefined to handle the 2*PI periodicity
-  virtual void wrap(colvarvalue &x_unwrapped) const;
+  virtual void wrap(colvarvalue &x) const;
 };
-
 
 
 /// \brief Colvar component: coordination number between two groups
 /// (colvarvalue::type_scalar type, range [0:N1*N2])
 class colvar::coordnum
-  : public colvar::cvc
-{
-protected:
-  /// First atom group
-  cvm::atom_group  *group1;
-  /// Second atom group
-  cvm::atom_group  *group2;
-  /// \brief "Cutoff" for isotropic calculation (default)
-  cvm::real     r0;
-  /// \brief "Cutoff vector" for anisotropic calculation
-  cvm::rvector  r0_vec;
-  /// \brief Whether r/r0 or \vec{r}*\vec{1/r0_vec} should be used
-  bool b_anisotropic;
-  /// Integer exponent of the function numerator
-  int en;
-  /// Integer exponent of the function denominator
-  int ed;
-
-  /// If true, group2 will be treated as a single atom
-  bool b_group2_center_only;
-
-  /// Tolerance for the pair list
-  cvm::real tolerance;
-
-  /// Frequency of update of the pair list
-  int pairlist_freq;
-
-  /// Pair list
-  bool *pairlist;
-
-public:
-
-  coordnum(std::string const &conf);
-  coordnum();
-  ~coordnum();
-
-  virtual void calc_value();
-  virtual void calc_gradients();
-  virtual void apply_force(colvarvalue const &force);
-  virtual cvm::real dist2(colvarvalue const &x1,
-                          colvarvalue const &x2) const;
-  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-
-  enum {
-    ef_null = 0,
-    ef_gradients = 1,
-    ef_anisotropic = (1<<8),
-    ef_use_pairlist = (1<<9),
-    ef_rebuild_pairlist = (1<<10)
-  };
-
-  /// \brief Calculate a coordination number through the function
-  /// (1-x**n)/(1-x**m), where x = |A1-A2|/r0 \param r0, r0_vec "cutoff" for
-  /// the coordination number (scalar or vector depending on user choice)
-  /// \param en Numerator exponent \param ed Denominator exponent \param First
-  /// atom \param Second atom \param pairlist_elem pointer to pair flag for
-  /// this pair \param tolerance A pair is defined as having a larger
-  /// coordination than this number
-  template<int flags>
-  static cvm::real switching_function(cvm::real const &r0,
-                                      cvm::rvector const &r0_vec,
-                                      int en,
-                                      int ed,
-                                      cvm::atom &A1,
-                                      cvm::atom &A2,
-                                      bool **pairlist_elem,
-                                      cvm::real tolerance);
-
-  /// Workhorse function
-  template<int flags> int compute_coordnum();
-
-  /// Workhorse function
-  template<int flags> void main_loop(bool **pairlist_elem);
-
-};
-
-
-
-/// \brief Colvar component: self-coordination number within a group
-/// (colvarvalue::type_scalar type, range [0:N*(N-1)/2])
-class colvar::selfcoordnum
-  : public colvar::cvc
-{
-protected:
-
-  /// Selected atoms
-  cvm::atom_group  *group1;
-  /// \brief "Cutoff" for isotropic calculation (default)
-  cvm::real     r0;
-  /// Integer exponent of the function numerator
-  int en;
-  /// Integer exponent of the function denominator
-  int ed;
-  cvm::real tolerance;
-  int pairlist_freq;
-  bool *pairlist;
-
-public:
-
-  selfcoordnum(std::string const &conf);
-  selfcoordnum();
-  ~selfcoordnum();
-  virtual void calc_value();
-  virtual void calc_gradients();
-  virtual void apply_force(colvarvalue const &force);
-
-  virtual cvm::real dist2(colvarvalue const &x1,
-                          colvarvalue const &x2) const;
-  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
-                                  colvarvalue const &x2) const;
-
-  /// Main workhorse function
-  template<int flags> int compute_selfcoordnum();
-};
-
-
-
-/// \brief Colvar component: coordination number between two groups
-/// (colvarvalue::type_scalar type, range [0:N1*N2])
-class colvar::groupcoordnum
   : public colvar::distance
 {
 protected:
@@ -1008,14 +733,35 @@ protected:
   int en;
   /// Integer exponent of the function denominator
   int ed;
+  /// \brief If true, group2 will be treated as a single atom
+  /// (default: loop over all pairs of atoms in group1 and group2)
+  bool b_group2_center_only;
 public:
   /// Constructor
-  groupcoordnum(std::string const &conf);
-  groupcoordnum();
-  virtual ~groupcoordnum() {}
+  coordnum(std::string const &conf);
+  coordnum();
+  virtual inline ~coordnum() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
+  template<bool b_gradients>
+  /// \brief Calculate a coordination number through the function
+  /// (1-x**n)/(1-x**m), x = |A1-A2|/r0 \param r0 "cutoff" for the
+  /// coordination number \param exp_num \i n exponent \param exp_den
+  /// \i m exponent \param A1 atom \param A2 atom
+  static cvm::real switching_function(cvm::real const &r0,
+                                      int const &exp_num, int const &exp_den,
+                                      cvm::atom &A1, cvm::atom &A2);
+
+  template<bool b_gradients>
+  /// \brief Calculate a coordination number through the function
+  /// (1-x**n)/(1-x**m), x = |(A1-A2)*(r0_vec)^-|1 \param r0_vec
+  /// vector of different cutoffs in the three directions \param
+  /// exp_num \i n exponent \param exp_den \i m exponent \param A1
+  /// atom \param A2 atom
+  static cvm::real switching_function(cvm::rvector const &r0_vec,
+                                      int const &exp_num, int const &exp_den,
+                                      cvm::atom &A1, cvm::atom &A2);
 
   virtual cvm::real dist2(colvarvalue const &x1,
                           colvarvalue const &x2) const;
@@ -1025,7 +771,42 @@ public:
                                   colvarvalue const &x2) const;
 };
 
+/// \brief Colvar component: self-coordination number within a group
+/// (colvarvalue::type_scalar type, range [0:N*(N-1)/2])
+class colvar::selfcoordnum
+  : public colvar::distance
+{
+protected:
+  /// \brief "Cutoff" for isotropic calculation (default)
+  cvm::real     r0;
+  /// Integer exponent of the function numerator
+  int en;
+  /// Integer exponent of the function denominator
+  int ed;
+public:
+  /// Constructor
+  selfcoordnum(std::string const &conf);
+  selfcoordnum();
+  virtual inline ~selfcoordnum() {}
+  virtual void calc_value();
+  virtual void calc_gradients();
+  virtual void apply_force(colvarvalue const &force);
+  template<bool b_gradients>
+  /// \brief Calculate a coordination number through the function
+  /// (1-x**n)/(1-x**m), x = |A1-A2|/r0 \param r0 "cutoff" for the
+  /// coordination number \param exp_num \i n exponent \param exp_den
+  /// \i m exponent \param A1 atom \param A2 atom
+  static cvm::real switching_function(cvm::real const &r0,
+                                      int const &exp_num, int const &exp_den,
+                                      cvm::atom &A1, cvm::atom &A2);
 
+  virtual cvm::real dist2(colvarvalue const &x1,
+                          colvarvalue const &x2) const;
+  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+};
 
 /// \brief Colvar component: hydrogen bond, defined as the product of
 /// a colvar::coordnum and 1/2*(1-cos((180-ang)/ang_tol))
@@ -1034,6 +815,8 @@ class colvar::h_bond
   : public colvar::cvc
 {
 protected:
+  /// Atoms involved in the component
+  cvm::atom     acceptor, donor;
   /// \brief "Cutoff" distance between acceptor and donor
   cvm::real     r0;
   /// Integer exponent of the function numerator
@@ -1047,7 +830,7 @@ public:
          cvm::atom const &donor,
          cvm::real r0, int en, int ed);
   h_bond();
-  virtual ~h_bond() {}
+  virtual ~h_bond();
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -1060,7 +843,202 @@ public:
                                   colvarvalue const &x2) const;
 };
 
+/// \brief Colvar component: number of broken bonds
+class colvar::bondbreak
+  : public colvar::distance
+{
+protected:
+  /// \brief Inner cutoff, can be < 0 for local reference
+  cvm::real        rmin;
+  /// \brief Outer cutoff
+  cvm::real        rmax;
+  /// \brief Bond cutoff
+  cvm::real        rcut;
+  /// \brief Power used to prefer large distortion
+  cvm::real        power;
+  /// \brief Waiting time until we rebuild or bond list
+  int              nwait;
+  /// \brief Treshhold to denote an event as "fast"
+  int              fastEventTresh;
+  /// \brief Sum of all pairwise contributions (before taking root)
+  cvm::real        pairsum;
+  /// \brief The colvar value w/o the offset, range [0,1]
+  cvm::real        progress;
+  /// \brief One or two groups?
+  bool             oneGroup;
+  /// \brief Exclude fast events or not?
+  bool             fastEvent;
+  /// \brief First partner of all bonds
+  std::vector<size_t> pairList1;
+  /// \brief Second partner of all bonds
+  std::vector<size_t> pairList2;
+  /// \brief Reference length of all bonds
+  std::vector<double> pairList3;
+  /// \brief Determines whether the bond list must be rebuild
+  bool             rebuildList;
+  /// \brief Turn on "cleaning" of bondlist
+  bool             cleanList;
+  /// \brief Turn on "purging" of bondlist from fast events
+  bool             purgeList;
+  /// \brief Offset to the colvar value (~number of transitions)
+  int              offset;
+  /// \brief Last step during which we've reset the step counter
+  size_t           laststep;
+  /// \brief First of the cleaning steps
+  size_t           cleanstep;
+  /// \brief Step at which last jump occured
+  size_t           jumpstep;
 
+
+public:
+  /// Constructor
+  bondbreak(std::string const &conf);
+  bondbreak();
+  virtual inline ~bondbreak() {}
+  virtual void calc_value();
+  virtual void calc_gradients();
+  virtual void apply_force(colvarvalue const &force);
+  virtual void build_bondlist();
+  template<bool b_gradients>
+  /// \brief Calculate the pairwise term
+  static cvm::real switching_function(cvm::real const &rmin, cvm::real const &rmax,
+                                      cvm::real const &power, cvm::real const &prefactor,
+                                      cvm::atom &A1, cvm::atom &A2);
+
+  virtual cvm::real dist2(colvarvalue const &x1,
+                          colvarvalue const &x2) const;
+  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+};
+
+/// \brief Colvar component: number of switched dihedrals
+class colvar::angleswitch
+  : public colvar::cvc
+{
+protected:
+  /// \brief Offset to the minimum angle
+  cvm::real        ang_offset;
+  /// \brief Period of the minimum angle
+  cvm::real        ang_period;
+  /// \brief Max deviation from minimal angle
+  cvm::real        ang_fluct;
+  /// \brief Power used to prefer large distortion
+  cvm::real        power;
+  /// \brief Waiting time until we rebuild or bond list
+  int              nwait;
+  /// \brief Sum of all pairwise contributions (before taking root)
+  cvm::real        pairsum;
+  /// \brief The colvar value w/o the offset, range [0,1]
+  cvm::real        progress;
+  /// \brief Reference angles
+  std::vector<cvm::real> angList;
+  /// \brief Determines whether the bond list must be rebuild
+  bool             rebuildList;
+  /// \brief Offset to the colvar value (~number of transitions)
+  int              offset;
+  /// \brief Last step during which we've reset the step counter
+  size_t           laststep;
+  /// Atom group
+  cvm::atom_group group1;
+  /// Atom group
+  cvm::atom_group group2;
+  /// Atom group
+  cvm::atom_group group3;
+  /// Atom group
+  cvm::atom_group group4;
+  /// Inter site vectors
+  cvm::rvector r12, r23, r34;
+
+public:
+  /// Constructor
+  angleswitch(std::string const &conf);
+  angleswitch();
+  virtual inline ~angleswitch() {}
+  virtual void calc_value();
+  virtual void calc_gradients();
+  virtual void apply_force(colvarvalue const &force);
+  virtual void build_bondlist();
+  virtual cvm::real ang_val(cvm::atom &a1, cvm::atom &a2, cvm::atom &a3, cvm::atom &a4);
+  virtual void ang_val_grad(cvm::rvector &F1, cvm::rvector &F2, cvm::rvector &F3, cvm::rvector &F4);
+  template<bool b_gradients>
+  /// \brief Calculate the pairwise term
+  cvm::real switching_function(cvm::real const &ang_min, cvm::real const &ang_width,
+                                      cvm::real const &power, cvm::real const &prefactor,
+                                      cvm::atom &A1, cvm::atom &A2, cvm::atom &A3, cvm::atom &A4);
+  virtual cvm::real dist2(colvarvalue const &x1,
+                          colvarvalue const &x2) const;
+  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+};
+
+
+/// \brief Colvar component: number of broken bonds
+class colvar::bondbreakmulti
+  : public colvar::distance
+{
+protected:
+  /// \brief Inner cutoffs
+  cvm::real        rmin11;
+  cvm::real        rmin22;
+  cvm::real        rmin12;
+  /// \brief Outer cutoffs
+  cvm::real        rmax11;
+  cvm::real        rmax22;
+  cvm::real        rmax12;
+  /// \brief Bond cutoffs
+  cvm::real        rcut11;
+  cvm::real        rcut22;
+  cvm::real        rcut12;
+  /// \brief Power used to prefer large distortion
+  cvm::real        power;
+  /// \brief Waiting time until we rebuild or bond list
+  int              nwait;
+  /// \brief Sum of all pairwise contributions (before taking root)
+  cvm::real        pairsum;
+  /// \brief The colvar value w/o the offset, range [0,1]
+  cvm::real        progress;
+  /// \brief First partner of all bonds
+  std::vector<size_t> pairList11_1;
+  std::vector<size_t> pairList22_1;
+  std::vector<size_t> pairList12_1;
+  /// \brief Second partner of all bonds
+  std::vector<size_t> pairList11_2;
+  std::vector<size_t> pairList22_2;
+  std::vector<size_t> pairList12_2;
+  /// \brief Determines whether the bond list must be rebuild
+  bool             rebuildList;
+  /// \brief Offset to the colvar value (~number of transitions)
+  int              offset;
+  /// \brief Last step during which we've reset the step counter
+  size_t           laststep;
+
+
+public:
+  /// Constructor
+  bondbreakmulti(std::string const &conf);
+  bondbreakmulti();
+  virtual inline ~bondbreakmulti() {}
+  virtual void calc_value();
+  virtual void calc_gradients();
+  virtual void apply_force(colvarvalue const &force);
+  virtual void build_bondlist();
+  template<bool b_gradients>
+  /// \brief Calculate the pairwise term
+  static cvm::real switching_function(cvm::real const &rmin, cvm::real const &rmax,
+                                      cvm::real const &power, cvm::real const &prefactor,
+                                      cvm::atom &A1, cvm::atom &A2);
+
+  virtual cvm::real dist2(colvarvalue const &x1,
+                          colvarvalue const &x2) const;
+  virtual colvarvalue dist2_lgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+  virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
+                                  colvarvalue const &x2) const;
+};
 
 /// \brief Colvar component: alpha helix content of a contiguous
 /// segment of 5 or more residues, implemented as a sum of phi/psi
@@ -1090,7 +1068,7 @@ public:
 
 //   alpha_dihedrals (std::string const &conf);
 //   alpha_dihedrals();
-//   virtual ~alpha_dihedrals() {}
+//   virtual inline ~alpha_dihedrals() {}
 //   virtual void calc_value();
 //   virtual void calc_gradients();
 //   virtual void apply_force (colvarvalue const &force);
@@ -1101,7 +1079,6 @@ public:
 //   virtual colvarvalue dist2_rgrad (colvarvalue const &x1,
 //                                    colvarvalue const &x2) const;
 // };
-
 
 
 /// \brief Colvar component: alpha helix content of a contiguous
@@ -1135,8 +1112,6 @@ public:
   virtual ~alpha_angles();
   void calc_value();
   void calc_gradients();
-  /// Re-implementation of cvc::collect_gradients() to carry over atomic gradients of sub-cvcs
-  void collect_gradients(std::vector<int> const &atom_ids, std::vector<cvm::rvector> &atomic_gradients);
   void apply_force(colvarvalue const &force);
   virtual cvm::real dist2(colvarvalue const &x1,
                           colvarvalue const &x2) const;
@@ -1145,8 +1120,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
-
 
 /// \brief Colvar component: dihedPC
 /// Projection of the config onto a dihedral principal component
@@ -1167,8 +1140,6 @@ public:
   virtual  ~dihedPC();
   void calc_value();
   void calc_gradients();
-  /// Re-implementation of cvc::collect_gradients() to carry over atomic gradients of sub-cvcs
-  void collect_gradients(std::vector<int> const &atom_ids, std::vector<cvm::rvector> &atomic_gradients);
   void apply_force(colvarvalue const &force);
   virtual cvm::real dist2(colvarvalue const &x1,
                           colvarvalue const &x2) const;
@@ -1177,8 +1148,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
-
 
 /// \brief Colvar component: orientation in space of an atom group,
 /// with respect to a set of reference coordinates
@@ -1190,7 +1159,7 @@ class colvar::orientation
 protected:
 
   /// Atom group
-  cvm::atom_group  *          atoms;
+  cvm::atom_group            atoms;
   /// Center of geometry of the group
   cvm::atom_pos              atoms_cog;
 
@@ -1208,8 +1177,7 @@ public:
 
   orientation(std::string const &conf);
   orientation();
-  virtual int init(std::string const &conf);
-  virtual ~orientation() {}
+  virtual inline ~orientation() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -1220,7 +1188,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: angle of rotation with respect to a set
@@ -1233,8 +1200,7 @@ public:
 
   orientation_angle(std::string const &conf);
   orientation_angle();
-  virtual int init(std::string const &conf);
-  virtual ~orientation_angle() {}
+  virtual inline ~orientation_angle() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -1245,7 +1211,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: cosine of the angle of rotation with respect to a set
@@ -1258,8 +1223,7 @@ public:
 
   orientation_proj(std::string const &conf);
   orientation_proj();
-  virtual int init(std::string const &conf);
-  virtual ~orientation_proj() {}
+  virtual inline ~orientation_proj() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -1270,7 +1234,6 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
 };
-
 
 
 /// \brief Colvar component: projection of the orientation vector onto
@@ -1286,8 +1249,7 @@ public:
 
   tilt(std::string const &conf);
   tilt();
-  virtual int init(std::string const &conf);
-  virtual ~tilt() {}
+  virtual inline ~tilt() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -1314,8 +1276,7 @@ public:
 
   spin_angle(std::string const &conf);
   spin_angle();
-  virtual int init(std::string const &conf);
-  virtual ~spin_angle() {}
+  virtual inline ~spin_angle() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void apply_force(colvarvalue const &force);
@@ -1329,7 +1290,7 @@ public:
   virtual colvarvalue dist2_rgrad(colvarvalue const &x1,
                                   colvarvalue const &x2) const;
   /// Redefined to handle the 2*PI periodicity
-  virtual void wrap(colvarvalue &x_unwrapped) const;
+  virtual void wrap(colvarvalue &x) const;
 };
 
 
@@ -1344,7 +1305,7 @@ class colvar::rmsd
 protected:
 
   /// Atom group
-  cvm::atom_group  *atoms;
+  cvm::atom_group             atoms;
 
   /// Reference coordinates (for RMSD calculation only)
   std::vector<cvm::atom_pos>  ref_pos;
@@ -1353,7 +1314,7 @@ public:
 
   /// Constructor
   rmsd(std::string const &conf);
-  virtual ~rmsd() {}
+  virtual inline ~rmsd() {}
   virtual void calc_value();
   virtual void calc_gradients();
   virtual void calc_force_invgrads();
@@ -1369,242 +1330,6 @@ public:
 
 
 
-// \brief Colvar component: flat vector of Cartesian coordinates
-// Mostly useful to compute scripted colvar values
-class colvar::cartesian
-  : public colvar::cvc
-{
-protected:
-  /// Atom group
-  cvm::atom_group  *atoms;
-  /// Which Cartesian coordinates to include
-  std::vector<size_t> axes;
-public:
-  cartesian(std::string const &conf);
-  cartesian();
-  virtual ~cartesian() {}
-  virtual void calc_value();
-  virtual void calc_gradients();
-  virtual void apply_force(colvarvalue const &force);
-};
-
-
-
-class colvar::componentDisabled
-  : public colvar::cvc
-{
-public:
-    componentDisabled(std::string const &conf) {
-        cvm::error("Error: this component is not enabled in the current build; please see https://colvars.github.io/README-c++11.html");
-    }
-    virtual ~componentDisabled() {}
-    virtual void calc_value() {}
-    virtual void calc_gradients() {}
-    virtual void apply_force(colvarvalue const &force) {}
-};
-
-
-
-#if (__cplusplus >= 201103L)
-class colvar::CartesianBasedPath
-  : public colvar::cvc
-{
-protected:
-    virtual void computeReferenceDistance(std::vector<cvm::real>& result);
-    /// Selected atoms
-    cvm::atom_group *atoms;
-    /// Fitting options
-    bool has_user_defined_fitting;
-    /// Reference frames
-    std::vector<std::vector<cvm::atom_pos>> reference_frames;
-    std::vector<std::vector<cvm::atom_pos>> reference_fitting_frames;
-    /// Atom groups for RMSD calculation together with reference frames
-    std::vector<cvm::atom_group*> comp_atoms;
-    /// Total number of reference frames
-    size_t total_reference_frames;
-public:
-    CartesianBasedPath(std::string const &conf);
-    virtual ~CartesianBasedPath();
-    virtual void calc_value() = 0;
-    virtual void apply_force(colvarvalue const &force) = 0;
-};
-
-/// \brief Colvar component: alternative path collective variable using geometry, variable s
-/// For more information see https://plumed.github.io/doc-v2.5/user-doc/html/_p_a_t_h.html
-/// Díaz Leines, G.; Ensing, B. Path Finding on High-Dimensional Free Energy Landscapes. Phys. Rev. Lett. 2012, 109 (2), 020601. https://doi.org/10.1103/PhysRevLett.109.020601.
-class colvar::gspath
-  : public colvar::CartesianBasedPath, public GeometricPathCV::GeometricPathBase<cvm::atom_pos, cvm::real, GeometricPathCV::path_sz::S>
-{
-private:
-    // Optimal rotation for compute v3
-    cvm::rotation rot_v3;
-protected:
-    virtual void prepareVectors();
-    virtual void updateReferenceDistances();
-public:
-    gspath(std::string const &conf);
-    virtual ~gspath() {}
-    virtual void calc_value();
-    virtual void calc_gradients();
-    virtual void apply_force(colvarvalue const &force);
-};
-
-
-
-/// \brief Colvar component: alternative path collective variable using geometry, variable z
-/// This should be merged with gspath in the same class by class inheritance or something else
-class colvar::gzpath
-  : public colvar::CartesianBasedPath, public GeometricPathCV::GeometricPathBase<cvm::atom_pos, cvm::real, GeometricPathCV::path_sz::Z>
-{
-private:
-    // Optimal rotation for compute v3, v4
-    cvm::rotation rot_v3;
-    cvm::rotation rot_v4;
-protected:
-    virtual void prepareVectors();
-    virtual void updateReferenceDistances();
-public:
-    gzpath(std::string const &conf);
-    virtual ~gzpath() {}
-    virtual void calc_value();
-    virtual void calc_gradients();
-    virtual void apply_force(colvarvalue const &force);
-};
-
-/// Current only linear combination of sub-CVCs is available
-class colvar::linearCombination
-  : public colvar::cvc
-{
-protected:
-    /// Map from string to the types of colvar components
-    std::map<std::string, std::function<colvar::cvc* (const std::string& subcv_conf)>> string_cv_map;
-    /// Sub-colvar components
-    std::vector<colvar::cvc*> cv;
-    /// If all sub-cvs use explicit gradients then we also use it
-    bool use_explicit_gradients;
-protected:
-    cvm::real getPolynomialFactorOfCVGradient(size_t i_cv) const;
-public:
-    linearCombination(std::string const &conf);
-    virtual ~linearCombination();
-    virtual void calc_value();
-    virtual void calc_gradients();
-    virtual void apply_force(colvarvalue const &force);
-};
-
-
-class colvar::CVBasedPath
-  : public colvar::cvc
-{
-protected:
-    /// Map from string to the types of colvar components
-    std::map<std::string, std::function<colvar::cvc* (const std::string& subcv_conf)>> string_cv_map;
-    /// Sub-colvar components
-    std::vector<colvar::cvc*> cv;
-    /// Refernce colvar values from path
-    std::vector<std::vector<colvarvalue>> ref_cv;
-    /// If all sub-cvs use explicit gradients then we also use it
-    bool use_explicit_gradients;
-    /// Total number of reference frames
-    size_t total_reference_frames;
-protected:
-    virtual void computeReferenceDistance(std::vector<cvm::real>& result);
-    cvm::real getPolynomialFactorOfCVGradient(size_t i_cv) const;
-public:
-    CVBasedPath(std::string const &conf);
-    virtual ~CVBasedPath();
-    virtual void calc_value() = 0;
-    virtual void apply_force(colvarvalue const &force) = 0;
-};
-
-
-/// \brief Colvar component: alternative path collective variable using geometry, variable s
-/// Allow any combination of existing (scalar) CVs
-/// For more information see https://plumed.github.io/doc-v2.5/user-doc/html/_p_a_t_h.html
-/// Díaz Leines, G.; Ensing, B. Path Finding on High-Dimensional Free Energy Landscapes. Phys. Rev. Lett. 2012, 109 (2), 020601. https://doi.org/10.1103/PhysRevLett.109.020601.
-class colvar::gspathCV
-  : public colvar::CVBasedPath, public GeometricPathCV::GeometricPathBase<colvarvalue, cvm::real, GeometricPathCV::path_sz::S>
-{
-protected:
-    virtual void updateReferenceDistances();
-    virtual void prepareVectors();
-public:
-    gspathCV(std::string const &conf);
-    virtual ~gspathCV();
-    virtual void calc_value();
-    virtual void calc_gradients();
-    virtual void apply_force(colvarvalue const &force);
-};
-
-
-
-class colvar::gzpathCV
-  : public colvar::CVBasedPath, public GeometricPathCV::GeometricPathBase<colvarvalue, cvm::real, GeometricPathCV::path_sz::Z>
-{
-protected:
-    virtual void updateReferenceDistances();
-    virtual void prepareVectors();
-public:
-    gzpathCV(std::string const &conf);
-    virtual ~gzpathCV();
-    virtual void calc_value();
-    virtual void calc_gradients();
-    virtual void apply_force(colvarvalue const &force);
-};
-
-#else // if the compiler doesn't support C++11
-
-class colvar::linearCombination
-  : public colvar::componentDisabled
-{
-public:
-    linearCombination(std::string const &conf) : componentDisabled(conf) {}
-};
-
-class colvar::CartesianBasedPath
-  : public colvar::componentDisabled
-{
-public:
-    CartesianBasedPath(std::string const &conf) : componentDisabled(conf) {}
-};
-
-class colvar::CVBasedPath
-  : public colvar::componentDisabled
-{
-public:
-    CVBasedPath(std::string const &conf) : componentDisabled(conf) {}
-};
-
-class colvar::gspath
-  : public colvar::componentDisabled
-{
-public:
-    gspath(std::string const &conf) : componentDisabled(conf) {}
-};
-
-class colvar::gzpath
-  : public colvar::componentDisabled
-{
-public:
-    gzpath(std::string const &conf) : componentDisabled(conf) {}
-};
-
-class colvar::gspathCV
-  : public colvar::componentDisabled
-{
-public:
-    gspathCV(std::string const &conf) : componentDisabled(conf) {}
-};
-
-class colvar::gzpathCV
-  : public colvar::componentDisabled
-{
-public:
-    gzpathCV(std::string const &conf) : componentDisabled(conf) {}
-};
-
-#endif // C++11 checking
-
 // metrics functions for cvc implementations
 
 // simple definitions of the distance functions; these are useful only
@@ -1615,26 +1340,257 @@ public:
 
 #define simple_scalar_dist_functions(TYPE)                              \
                                                                         \
-                                                                        \
-  cvm::real colvar::TYPE::dist2(colvarvalue const &x1,                  \
-                                colvarvalue const &x2) const            \
+  inline cvm::real colvar::TYPE::dist2(colvarvalue const &x1,           \
+                                       colvarvalue const &x2) const     \
   {                                                                     \
     return (x1.real_value - x2.real_value)*(x1.real_value - x2.real_value); \
   }                                                                     \
                                                                         \
-                                                                        \
-  colvarvalue colvar::TYPE::dist2_lgrad(colvarvalue const &x1,          \
-                                        colvarvalue const &x2) const    \
+  inline colvarvalue colvar::TYPE::dist2_lgrad(colvarvalue const &x1,   \
+                                               colvarvalue const &x2) const \
   {                                                                     \
     return 2.0 * (x1.real_value - x2.real_value);                       \
   }                                                                     \
                                                                         \
-                                                                        \
-  colvarvalue colvar::TYPE::dist2_rgrad(colvarvalue const &x1,          \
-                                        colvarvalue const &x2) const    \
+  inline colvarvalue colvar::TYPE::dist2_rgrad(colvarvalue const &x1,   \
+                                               colvarvalue const &x2) const \
   {                                                                     \
     return this->dist2_lgrad(x2, x1);                                   \
   }                                                                     \
                                                                         \
+
+simple_scalar_dist_functions(distance)
+// NOTE: distance_z has explicit functions, see below
+simple_scalar_dist_functions(distance_xy)
+simple_scalar_dist_functions(distance_inv)
+simple_scalar_dist_functions(angle)
+simple_scalar_dist_functions(coordnum)
+simple_scalar_dist_functions(selfcoordnum)
+simple_scalar_dist_functions(bondbreak)
+simple_scalar_dist_functions(angleswitch)
+simple_scalar_dist_functions(bondbreakmulti)
+simple_scalar_dist_functions(h_bond)
+simple_scalar_dist_functions(gyration)
+simple_scalar_dist_functions(inertia)
+simple_scalar_dist_functions(inertia_z)
+simple_scalar_dist_functions(rmsd)
+simple_scalar_dist_functions(orientation_angle)
+simple_scalar_dist_functions(orientation_proj)
+simple_scalar_dist_functions(tilt)
+simple_scalar_dist_functions(eigenvector)
+//  simple_scalar_dist_functions (alpha_dihedrals)
+simple_scalar_dist_functions(alpha_angles)
+simple_scalar_dist_functions(dihedPC)
+
+
+// metrics functions for cvc implementations with a periodicity
+
+inline cvm::real colvar::dihedral::dist2(colvarvalue const &x1,
+                                           colvarvalue const &x2) const
+{
+cvm::real diff = x1.real_value - x2.real_value;
+diff = (diff < -180.0 ? diff + 360.0 : (diff > 180.0 ? diff - 360.0 : diff));
+return diff * diff;
+}
+
+inline colvarvalue colvar::dihedral::dist2_lgrad(colvarvalue const &x1,
+                                                   colvarvalue const &x2) const
+{
+cvm::real diff = x1.real_value - x2.real_value;
+diff = (diff < -180.0 ? diff + 360.0 : (diff > 180.0 ? diff - 360.0 : diff));
+return 2.0 * diff;
+}
+
+inline colvarvalue colvar::dihedral::dist2_rgrad(colvarvalue const &x1,
+                                                   colvarvalue const &x2) const
+{
+cvm::real diff = x1.real_value - x2.real_value;
+diff = (diff < -180.0 ? diff + 360.0 : (diff > 180.0 ? diff - 360.0 : diff));
+return (-2.0) * diff;
+}
+
+inline void colvar::dihedral::wrap(colvarvalue &x) const
+{
+if ((x.real_value - wrap_center) >= 180.0) {
+x.real_value -= 360.0;
+return;
+}
+
+if ((x.real_value - wrap_center) < -180.0) {
+x.real_value += 360.0;
+return;
+}
+
+return;
+}
+
+inline cvm::real colvar::spin_angle::dist2(colvarvalue const &x1,
+                                             colvarvalue const &x2) const
+{
+cvm::real diff = x1.real_value - x2.real_value;
+diff = (diff < -180.0 ? diff + 360.0 : (diff > 180.0 ? diff - 360.0 : diff));
+return diff * diff;
+}
+
+inline colvarvalue colvar::spin_angle::dist2_lgrad(colvarvalue const &x1,
+                                                     colvarvalue const &x2) const
+{
+cvm::real diff = x1.real_value - x2.real_value;
+diff = (diff < -180.0 ? diff + 360.0 : (diff > 180.0 ? diff - 360.0 : diff));
+return 2.0 * diff;
+}
+
+inline colvarvalue colvar::spin_angle::dist2_rgrad(colvarvalue const &x1,
+                                                     colvarvalue const &x2) const
+{
+cvm::real diff = x1.real_value - x2.real_value;
+diff = (diff < -180.0 ? diff + 360.0 : (diff > 180.0 ? diff - 360.0 : diff));
+return (-2.0) * diff;
+}
+
+inline void colvar::spin_angle::wrap(colvarvalue &x) const
+{
+if ((x.real_value - wrap_center) >= 180.0) {
+x.real_value -= 360.0;
+return;
+}
+
+if ((x.real_value - wrap_center) < -180.0) {
+x.real_value += 360.0;
+return;
+}
+
+return;
+}
+
+
+// Projected distance
+// Differences should always be wrapped around 0 (ignoring wrap_center)
+inline cvm::real colvar::distance_z::dist2(colvarvalue const &x1,
+                                             colvarvalue const &x2) const
+{
+  cvm::real diff = x1.real_value - x2.real_value;
+  if (period != 0.0) {
+    cvm::real shift = std::floor(diff/period + 0.5);
+    diff -= shift * period;
+  }
+  return diff * diff;
+}
+
+inline colvarvalue colvar::distance_z::dist2_lgrad(colvarvalue const &x1,
+                                                   colvarvalue const &x2) const
+{
+  cvm::real diff = x1.real_value - x2.real_value;
+  if (period != 0.0) {
+    cvm::real shift = std::floor(diff/period + 0.5);
+    diff -= shift * period;
+  }
+  return 2.0 * diff;
+}
+
+inline colvarvalue colvar::distance_z::dist2_rgrad(colvarvalue const &x1,
+                                                   colvarvalue const &x2) const
+{
+  cvm::real diff = x1.real_value - x2.real_value;
+  if (period != 0.0) {
+    cvm::real shift = std::floor(diff/period + 0.5);
+    diff -= shift * period;
+  }
+  return (-2.0) * diff;
+}
+
+inline void colvar::distance_z::wrap(colvarvalue &x) const
+{
+  if (! this->b_periodic) {
+    // don't wrap if the period has not been set
+    return;
+  }
+
+  cvm::real shift = std::floor((x.real_value - wrap_center) / period + 0.5);
+  x.real_value -= shift * period;
+  return;
+}
+
+
+// distance between three dimensional vectors
+//
+// TODO apply PBC to distance_vec
+// Note: differences should be centered around (0, 0, 0)!
+
+inline cvm::real colvar::distance_vec::dist2(colvarvalue const &x1,
+                                             colvarvalue const &x2) const
+{
+  return cvm::position_dist2(x1.rvector_value, x2.rvector_value);
+}
+
+inline colvarvalue colvar::distance_vec::dist2_lgrad(colvarvalue const &x1,
+                                                     colvarvalue const &x2) const
+{
+  return 2.0 * cvm::position_distance(x2.rvector_value, x1.rvector_value);
+}
+
+inline colvarvalue colvar::distance_vec::dist2_rgrad(colvarvalue const &x1,
+                                                     colvarvalue const &x2) const
+{
+  return 2.0 * cvm::position_distance(x2.rvector_value, x1.rvector_value);
+}
+
+inline cvm::real colvar::distance_dir::dist2(colvarvalue const &x1,
+                                             colvarvalue const &x2) const
+{
+  return (x1.rvector_value - x2.rvector_value).norm2();
+}
+
+inline colvarvalue colvar::distance_dir::dist2_lgrad(colvarvalue const &x1,
+                                                     colvarvalue const &x2) const
+{
+  return colvarvalue((x1.rvector_value - x2.rvector_value), colvarvalue::type_unit3vector);
+}
+
+inline colvarvalue colvar::distance_dir::dist2_rgrad(colvarvalue const &x1,
+                                                     colvarvalue const &x2) const
+{
+  return colvarvalue((x2.rvector_value - x1.rvector_value), colvarvalue::type_unit3vector);
+}
+
+inline cvm::real colvar::distance_pairs::dist2(colvarvalue const &x1,
+                                               colvarvalue const &x2) const
+{
+  return (x1.vector1d_value - x2.vector1d_value).norm2();
+}
+
+inline colvarvalue colvar::distance_pairs::dist2_lgrad(colvarvalue const &x1,
+                                                       colvarvalue const &x2) const
+{
+  return colvarvalue((x1.vector1d_value - x2.vector1d_value), colvarvalue::type_vector);
+}
+
+inline colvarvalue colvar::distance_pairs::dist2_rgrad(colvarvalue const &x1,
+                                                       colvarvalue const &x2) const
+{
+  return colvarvalue((x2.vector1d_value - x1.vector1d_value), colvarvalue::type_vector);
+}
+
+
+// distance between quaternions
+
+inline cvm::real colvar::orientation::dist2(colvarvalue const &x1,
+                                            colvarvalue const &x2) const
+{
+  return x1.quaternion_value.dist2(x2);
+}
+
+inline colvarvalue colvar::orientation::dist2_lgrad(colvarvalue const &x1,
+                                                    colvarvalue const &x2) const
+{
+  return x1.quaternion_value.dist2_grad(x2);
+}
+
+inline colvarvalue colvar::orientation::dist2_rgrad(colvarvalue const &x1,
+                                                    colvarvalue const &x2) const
+{
+  return x2.quaternion_value.dist2_grad(x1);
+}
+
 
 #endif

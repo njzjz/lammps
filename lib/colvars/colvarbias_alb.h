@@ -1,31 +1,30 @@
 // -*- c++ -*-
 
-// This file is part of the Collective Variables module (Colvars).
-// The original version of Colvars and its updates are located at:
-// https://github.com/colvars/colvars
-// Please update all Colvars source files before making any changes.
-// If you wish to distribute your changes, please submit them to the
-// Colvars repository at GitHub.
-
 #ifndef COLVARBIAS_ALB_H
 #define COLVARBIAS_ALB_H
 
 #include "colvar.h"
-#include "colvarbias.h"
-
+#include "colvarbias_restraint.h"
 
 class colvarbias_alb : public colvarbias {
 
 public:
-
-  colvarbias_alb(char const *key);
+  colvarbias_alb(std::string const &conf, char const *key);
   virtual ~colvarbias_alb();
-  virtual int init(std::string const &conf);
-  virtual int update();
 
-  virtual std::string const get_state_params() const;
-  virtual int set_state_params(std::string const &conf);
+
+  virtual cvm::real update();
+
+  /// Read the bias configuration from a restart file
+  virtual std::istream & read_restart(std::istream &is);
+
+  /// Write the bias configuration to a restart file
+  virtual std::ostream & write_restart(std::ostream &os);
+
+  /// Write a label to the trajectory file (comment line)
   virtual std::ostream & write_traj_label(std::ostream &os);
+
+  /// Output quantities such as the bias energy to the trajectory file
   virtual std::ostream & write_traj(std::ostream &os);
 
 protected:

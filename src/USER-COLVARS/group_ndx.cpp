@@ -1,5 +1,3 @@
-// -*- c++ -*-
-
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    http://lammps.sandia.gov, Sandia National Laboratories
@@ -17,12 +15,14 @@
 ------------------------------------------------------------------------- */
 
 #include "group_ndx.h"
-#include <mpi.h>
-#include <cstdlib>
 #include "atom.h"
 #include "comm.h"
 #include "group.h"
+#include "memory.h"
 #include "error.h"
+
+#include <stdio.h>
+#include <stdlib.h>
 
 using namespace LAMMPS_NS;
 
@@ -48,7 +48,7 @@ static int cmptagint(const void *p1, const void *p2)
 static void write_group(FILE *fp, int gid, Atom *atom, Group *group, int me,
                         int np, MPI_Comm world, FILE *screen, FILE *logfile)
 {
-  char fmt[16];
+  char fmt[8];
   tagint *sendlist, *recvlist;
   bigint num = group->count(gid);
   int lnum, cols;
@@ -71,7 +71,7 @@ static void write_group(FILE *fp, int gid, Atom *atom, Group *group, int me,
       ++i;
       j /= 10;
     }
-    snprintf(fmt,16,"%%%dd ", i);
+    sprintf(fmt,"%%%dd ", i);
     cols = 80 / (i+1);
   }
 
@@ -88,11 +88,10 @@ static void write_group(FILE *fp, int gid, Atom *atom, Group *group, int me,
     for (i = 0; i < nlocal; i++)
       if (mask[i] & groupbit) sendlist[lnum++] = tag[i];
 
+    MPI_Status status;
+    MPI_Request request;
     int nrecv,allrecv;
     if (me == 0) {
-      MPI_Status status;
-      MPI_Request request;
-
       for (i=0; i < lnum; i++)
         recvlist[i] = sendlist[i];
 
@@ -108,7 +107,7 @@ static void write_group(FILE *fp, int gid, Atom *atom, Group *group, int me,
       // sort received list
       qsort((void *)recvlist, num, sizeof(tagint), cmptagint);
     } else {
-      MPI_Recv(&nrecv,0,MPI_INT,0,0,world,MPI_STATUS_IGNORE);
+      MPI_Recv(&nrecv,0,MPI_INT,0,0,world,&status);
       MPI_Rsend(sendlist,lnum,MPI_LMP_TAGINT,0,0,world);
     }
     delete [] sendlist;

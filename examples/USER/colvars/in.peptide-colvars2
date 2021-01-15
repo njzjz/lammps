@@ -1,4 +1,5 @@
-# Solvated 5-mer peptide
+#
+#Solvated 5-mer peptide
 
 units		real
 atom_style	full

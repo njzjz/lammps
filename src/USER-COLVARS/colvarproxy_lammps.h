@@ -1,31 +1,35 @@
-// -*- c++ -*-
-
-// This file is part of the Collective Variables module (Colvars).
-// The original version of Colvars and its updates are located at:
-// https://github.com/colvars/colvars
-// Please update all Colvars source files before making any changes.
-// If you wish to distribute your changes, please submit them to the
-// Colvars repository at GitHub.
-
 #ifndef COLVARPROXY_LAMMPS_H
 #define COLVARPROXY_LAMMPS_H
 
-#include "colvarproxy_lammps_version.h"  // IWYU pragma: export
-
-#include <mpi.h>
-#include <cstddef>
-#include <string>
-#include <vector>
-
 #include "colvarmodule.h"
 #include "colvarproxy.h"
-#include "colvartypes.h"
 
+#include "lammps.h"
+#include "domain.h"
+#include "force.h"
 #include "random_park.h"
-#include "lammps.h"  // IWYU pragma: keep
-#include "domain.h"  // IWYU pragma: keep
-#include "force.h"   // IWYU pragma: keep
-#include "update.h"  // IWYU pragma: keep
+#include "update.h"
+
+#include <string>
+#include <vector>
+#include <iostream>
+
+#ifndef COLVARPROXY_VERSION
+#define COLVARPROXY_VERSION "2014-10-29"
+#endif
+
+/* struct for packed data communication of coordinates and forces. */
+struct commdata {
+  int tag,type;
+  double x,y,z,m;
+};
+
+inline std::ostream & operator<< (std::ostream &out, const commdata &cd)
+{
+  out << " (" << cd.tag << "/" << cd.type << ": "
+      << cd.x << ", " << cd.y << ", " << cd.z << ") ";
+  return out;
+};
 
 /// \brief Communication between colvars and LAMMPS
 /// (implementation of \link colvarproxy \endlink)
@@ -35,38 +39,36 @@ class colvarproxy_lammps : public colvarproxy {
  protected:
 
   // pointers to LAMMPS class instances
-  LAMMPS_NS::LAMMPS *_lmp;
-  LAMMPS_NS::RanPark *_random;
+  class LAMMPS_NS::LAMMPS *_lmp;
+  class LAMMPS_NS::RanPark *_random;
 
   // state of LAMMPS properties
-  double t_target, my_timestep, my_boltzmann, my_angstrom;
+  double t_target;
   double bias_energy;
   int  restart_every;
   int  previous_step;
 
   bool first_timestep;
-  bool total_force_requested;
+  bool system_force_requested;
   bool do_exit;
 
-  // std::vector<int>          colvars_atoms;
-  // std::vector<size_t>       colvars_atoms_ncopies;
-  // std::vector<struct commdata> positions;
-  // std::vector<struct commdata> total_forces;
-  // std::vector<struct commdata> applied_forces;
-  // std::vector<struct commdata> previous_applied_forces;
-
-  std::vector<int>          atoms_types;
+  std::vector<int>          colvars_atoms;
+  std::vector<size_t>       colvars_atoms_ncopies;
+  std::vector<struct commdata> positions;
+  std::vector<struct commdata> total_forces;
+  std::vector<struct commdata> applied_forces;
+  std::vector<struct commdata> previous_applied_forces;
 
   MPI_Comm inter_comm;     // MPI comm with 1 root proc from each world
   int inter_me, inter_num; // rank for the inter replica comm
 
  public:
   friend class cvm::atom;
-  colvarproxy_lammps(LAMMPS_NS::LAMMPS *lmp, const char *,
-                     const char *, const int, const double, MPI_Comm);
+  colvarproxy_lammps (LAMMPS_NS::LAMMPS *lmp, const char *,
+                      const char *, const int, const double, MPI_Comm);
   virtual ~colvarproxy_lammps();
   void init(const char*);
-  int setup();
+  void setup();
 
  // disable default and copy constructor
  private:
@@ -76,9 +78,15 @@ class colvarproxy_lammps : public colvarproxy {
   // methods for lammps to move data or trigger actions in the proxy
  public:
   void set_temperature(double t) { t_target = t; };
-  bool total_forces_enabled() const { return total_force_requested; };
-  bool total_forces_same_step() const { return true; };
+  bool need_system_forces() const { return  system_force_requested; };
   bool want_exit() const { return do_exit; };
+  std::vector<int> *             get_tags()   { return &colvars_atoms; };
+  std::vector<struct commdata> * get_coords() { return &positions; };
+  std::vector<struct commdata> * get_forces() { return &applied_forces; };
+  std::vector<struct commdata> * get_oforce() { return &total_forces; };
+
+  // initialize atom structure
+  int init_lammps_atom(const int &, cvm::atom *);
 
   // perform colvars computation. returns biasing energy
   double compute();
@@ -89,47 +97,48 @@ class colvarproxy_lammps : public colvarproxy {
   // set status from string
   bool deserialize_status(std::string &);
 
-  // Write files expected from Colvars (called by post_run())
-  void write_output_files();
-
-  // read additional config from file
-  void add_config_file(char const *config_filename);
-
-  // read additional config from string
-  void add_config_string(const std::string &config);
-
   // implementation of pure methods from base class
  public:
 
-  inline cvm::real unit_angstrom() { return my_angstrom; };
-  inline cvm::real boltzmann() { return my_boltzmann; };
-  inline cvm::real temperature() { return t_target; };
-  inline cvm::real dt() { return my_timestep; }; // return _lmp->update->dt * _lmp->force->femtosecond; };
+  inline cvm::real unit_angstrom() { return _lmp->force->angstrom; };
+  cvm::real boltzmann() { return _lmp->force->boltz; };
+  cvm::real temperature() { return t_target; };
+  cvm::real dt() { return _lmp->update->dt * _lmp->force->femtosecond; };
 
   inline size_t restart_frequency() { return restart_every; };
 
   void add_energy(cvm::real energy) { bias_energy += energy; };
-  void request_total_force(bool yesno) { total_force_requested = yesno; };
+  void request_system_force(bool yesno) { system_force_requested = yesno; };
 
   void log(std::string const &message);
   void error(std::string const &message);
   void fatal_error(std::string const &message);
+  void exit(std::string const &message);
 
   cvm::rvector position_distance(cvm::atom_pos const &pos1,
-                                 cvm::atom_pos const &pos2) const;
+                                 cvm::atom_pos const &pos2);
+  cvm::real position_dist2(cvm::atom_pos const &pos1,
+                           cvm::atom_pos const &pos2);
+  void select_closest_image(cvm::atom_pos &pos,
+                            cvm::atom_pos const &ref_pos);
+
+  int load_atoms(char const *filename,
+                  std::vector<cvm::atom> &atoms,
+                  std::string const &pdb_field,
+                  double const pdb_field_value = 0.0);
+
+  int load_coords(char const *filename,
+                   std::vector<cvm::atom_pos> &pos,
+                   const std::vector<int> &indices,
+                   std::string const &pdb_field,
+                   double const pdb_field_value = 0.0);
 
   int backup_file(char const *filename);
 
   cvm::real rand_gaussian(void) { return _random->gaussian(); };
 
-  int init_atom(int atom_number);
-  int check_atom_id(int atom_number);
-
-  inline std::vector<int> *modify_atom_types() { return &atoms_types; }
-
   // implementation of optional methods from base class
  public:
-
   // Multi-replica support
   // Indicate if multi-replica support is available and active
   virtual bool replica_enabled() { return (inter_comm != MPI_COMM_NULL); }
@@ -152,3 +161,8 @@ class colvarproxy_lammps : public colvarproxy {
 
 #endif
 
+
+// Emacs
+// Local Variables:
+// mode: C++
+// End:

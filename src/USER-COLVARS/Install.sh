@@ -5,10 +5,6 @@ mode=$1
 
 # arg1 = file, arg2 = file it depends on
 
-# enforce using portable C locale
-LC_ALL=C
-export LC_ALL
-
 action () {
   if (test $mode = 0) then
     rm -f ../$1
@@ -29,7 +25,7 @@ action () {
 # all package files with no dependencies
 
 for file in *.cpp *.h; do
-  test -f ${file} && action $file
+  action $file
 done
 
 # edit 2 Makefile.package files to include/exclude package info

@@ -1,12 +1,3 @@
-// -*- c++ -*-
-
-// This file is part of the Collective Variables module (Colvars).
-// The original version of Colvars and its updates are located at:
-// https://github.com/colvars/colvars
-// Please update all Colvars source files before making any changes.
-// If you wish to distribute your changes, please submit them to the
-// Colvars repository at GitHub.
-
 /* -*- c++ -*- ----------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    http://lammps.sandia.gov, Sandia National Laboratories
@@ -34,9 +25,11 @@ FixStyle(colvars,FixColvars)
 #define LMP_FIX_COLVARS_H
 
 #include "fix.h"
-#include <mpi.h>
+#include <vector>
 
+// forward declaration
 class colvarproxy_lammps;
+struct commdata;
 
 namespace LAMMPS_NS {
 
@@ -49,13 +42,11 @@ class FixColvars : public Fix {
   virtual int setmask();
   virtual void init();
   virtual void setup(int);
-  virtual int modify_param(int, char **);
   virtual void min_setup(int vflag) {setup(vflag);};
   virtual void min_post_force(int);
   virtual void post_force(int);
   virtual void post_force_respa(int, int, int);
   virtual void end_of_step();
-  virtual void post_run();
   virtual double compute_scalar();
   virtual double memory_usage();
 
@@ -63,7 +54,7 @@ class FixColvars : public Fix {
   virtual void restart(char *);
 
  protected:
-  colvarproxy_lammps *proxy; // pointer to the colvars proxy class
+  class colvarproxy_lammps *proxy; // pointer to the colvars proxy class
   char *conf_file;     // name of colvars config file
   char *inp_name;      // name/prefix of colvars restart file
   char *out_name;      // prefix string for all output files
@@ -75,6 +66,9 @@ class FixColvars : public Fix {
   int   me;            // my MPI rank in this "world".
   int   num_coords;    // total number of atoms controlled by this fix
   tagint *taglist;     // list of all atom IDs referenced by colvars.
+  std::vector<struct commdata> *coords; // coordinates of colvar atoms
+  std::vector<struct commdata> *forces; // received forces of colvar atoms
+  std::vector<struct commdata> *oforce; // old total forces of colvar atoms
 
   int   nmax;          // size of atom communication buffer.
   int   size_one;      // bytes per atom in communication buffer.
@@ -130,7 +124,7 @@ E: Cannot use fix colvars without atom IDs
 
 Atom IDs are not defined, but fix colvars needs them to identify an atom.
 
-E: Fix colvars requires an atom map, see atom_modify
+E: Fix colvars requires an atom map
 
 Use the atom_modify command to create an atom map.
 

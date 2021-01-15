@@ -1,12 +1,3 @@
-// -*- c++ -*-
-
-// This file is part of the Collective Variables module (Colvars).
-// The original version of Colvars and its updates are located at:
-// https://github.com/colvars/colvars
-// Please update all Colvars source files before making any changes.
-// If you wish to distribute your changes, please submit them to the
-// Colvars repository at GitHub.
-
 /* ----------------------------------------------------------------------
    LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
    http://lammps.sandia.gov, Sandia National Laboratories
@@ -24,20 +15,18 @@
    Contributing author:  Axel Kohlmeyer (Temple U)
 ------------------------------------------------------------------------- */
 
-#include "fix_colvars.h"
-#include <mpi.h>
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
-#include <string>
-#include <vector>
-#include <memory>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 
+#include "fix_colvars.h"
 #include "atom.h"
 #include "comm.h"
 #include "domain.h"
 #include "error.h"
-#include "force.h"
+#include "group.h"
 #include "memory.h"
 #include "modify.h"
 #include "respa.h"
@@ -46,7 +35,6 @@
 #include "citeme.h"
 
 #include "colvarproxy_lammps.h"
-#include "colvarmodule.h"
 
 static const char colvars_pub[] =
   "fix colvars command:\n\n"
@@ -58,19 +46,6 @@ static const char colvars_pub[] =
   " year =    2013,\n"
   " note =    {doi: 10.1080/00268976.2013.813594}\n"
   "}\n\n";
-
-/* struct for packed data communication of coordinates and forces. */
-struct LAMMPS_NS::commdata {
-  int tag,type;
-  double x,y,z,m,q;
-};
-
-inline std::ostream & operator<< (std::ostream &out, const LAMMPS_NS::commdata &cd)
-{
-  out << " (" << cd.tag << "/" << cd.type << ": "
-      << cd.x << ", " << cd.y << ", " << cd.z << ") ";
-  return out;
-}
 
 /* re-usable integer hash table code with static linkage. */
 
@@ -349,6 +324,7 @@ FixColvars::FixColvars(LAMMPS *lmp, int narg, char **arg) :
   nlevels_respa = 0;
   init_flag = 0;
   num_coords = 0;
+  coords = forces = oforce = NULL;
   comm_buf = NULL;
   force_buf = NULL;
   proxy = NULL;
@@ -394,7 +370,6 @@ int FixColvars::setmask()
   mask |= POST_FORCE;
   mask |= POST_FORCE_RESPA;
   mask |= END_OF_STEP;
-  mask |= POST_RUN;
   return mask;
 }
 
@@ -408,7 +383,7 @@ void FixColvars::init()
     error->all(FLERR,"Cannot use fix colvars without atom IDs");
 
   if (atom->map_style == 0)
-    error->all(FLERR,"Fix colvars requires an atom map, see atom_modify");
+    error->all(FLERR,"Fix colvars requires an atom map");
 
   if ((me == 0) && (update->whichflag == 2))
     error->warning(FLERR,"Using fix colvars with minimization");
@@ -468,8 +443,10 @@ void FixColvars::one_time_init()
     proxy = new colvarproxy_lammps(lmp,inp_name,out_name,
                                    rng_seed,t_target,root2root);
     proxy->init(conf_file);
-
-    num_coords = (proxy->modify_atom_positions()->size());
+    coords = proxy->get_coords();
+    forces = proxy->get_forces();
+    oforce = proxy->get_oforce();
+    num_coords = coords->size();
   }
 
   // send the list of all colvar atom IDs to all nodes.
@@ -480,7 +457,8 @@ void FixColvars::one_time_init()
   memory->create(force_buf,3*num_coords,"colvars:force_buf");
 
   if (me == 0) {
-    std::vector<int> &tl = *(proxy->modify_atom_ids());
+    std::vector<int> *tags_list = proxy->get_tags();
+    std::vector<int> &tl = *tags_list;
     inthash_t *hashtable=new inthash_t;
     inthash_init(hashtable, num_coords);
     idmap = (void *)hashtable;
@@ -491,31 +469,6 @@ void FixColvars::one_time_init()
     }
   }
   MPI_Bcast(taglist, num_coords, MPI_LMP_TAGINT, 0, world);
-}
-
-/* ---------------------------------------------------------------------- */
-
-int FixColvars::modify_param(int narg, char **arg)
-{
-  if (strcmp(arg[0],"configfile") == 0) {
-    if (narg < 2) error->all(FLERR,"Illegal fix_modify command");
-    if (me == 0) {
-      if (! proxy)
-        error->one(FLERR,"Cannot use fix_modify before initialization");
-      proxy->add_config_file(arg[1]);
-    }
-    return 2;
-  } else if (strcmp(arg[0],"config") == 0) {
-    if (narg < 2) error->all(FLERR,"Illegal fix_modify command");
-    if (me == 0) {
-      if (! proxy)
-        error->one(FLERR,"Cannot use fix_modify before initialization");
-      std::string conf(arg[1]);
-      proxy->add_config_string(conf);
-    }
-    return 2;
-  }
-  return 0;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -555,20 +508,17 @@ void FixColvars::setup(int vflag)
 
   if (me == 0) {
 
-    std::vector<int>           &id = *(proxy->modify_atom_ids());
-    std::vector<int>           &tp = *(proxy->modify_atom_types());
-    std::vector<cvm::atom_pos> &cd = *(proxy->modify_atom_positions());
-    std::vector<cvm::rvector>  &of = *(proxy->modify_atom_total_forces());
-    std::vector<cvm::real>     &m  = *(proxy->modify_atom_masses());
-    std::vector<cvm::real>     &q  = *(proxy->modify_atom_charges());
+    std::vector<struct commdata> &cd = *coords;
+    std::vector<struct commdata> &of = *oforce;
 
     // store coordinate data in holding array, clear old forces
-
 
     for (i=0; i<num_coords; ++i) {
       const tagint k = atom->map(taglist[i]);
       if ((k >= 0) && (k < nlocal)) {
 
+        of[i].tag  = cd[i].tag  = tag[k];
+        of[i].type = cd[i].type = type[k];
         of[i].x = of[i].y = of[i].z = 0.0;
 
         if (unwrap_flag) {
@@ -585,12 +535,9 @@ void FixColvars::setup(int vflag)
           cd[i].z = x[k][2];
         }
         if (atom->rmass_flag) {
-          m[i] = atom->rmass[k];
+          cd[i].m = atom->rmass[k];
         } else {
-          m[i] = atom->mass[type[k]];
-        }
-        if (atom->q_flag) {
-          q[i] = atom->q[k];
+          cd[i].m = atom->mass[type[k]];
         }
       }
     }
@@ -606,20 +553,14 @@ void FixColvars::setup(int vflag)
       ndata /= size_one;
 
       for (int k=0; k<ndata; ++k) {
-
         const int j = inthash_lookup(idmap, comm_buf[k].tag);
-
         if (j != HASH_FAIL) {
-
-          tp[j] = comm_buf[k].type;
-
+          of[j].tag  = cd[j].tag  = comm_buf[k].tag;
+          of[j].type = cd[j].type = comm_buf[k].type;
           cd[j].x = comm_buf[k].x;
           cd[j].y = comm_buf[k].y;
           cd[j].z = comm_buf[k].z;
-
-          m[j] = comm_buf[k].m;
-          q[j] = comm_buf[k].q;
-
+          cd[j].m = comm_buf[k].m;
           of[j].x = of[j].y = of[j].z = 0.0;
         }
       }
@@ -656,15 +597,11 @@ void FixColvars::setup(int vflag)
           comm_buf[nme].m = atom->mass[type[k]];
         }
 
-        if (atom->q_flag) {
-          comm_buf[nme].q = atom->q[k];
-        }
-
         ++nme;
       }
     }
     /* blocking receive to wait until it is our turn to send data. */
-    MPI_Recv(&tmp, 0, MPI_INT, 0, 0, world, MPI_STATUS_IGNORE);
+    MPI_Recv(&tmp, 0, MPI_INT, 0, 0, world, &status);
     MPI_Rsend(comm_buf, nme*size_one, MPI_BYTE, 0, 0, world);
   }
 
@@ -685,7 +622,7 @@ void FixColvars::setup(int vflag)
 /* ---------------------------------------------------------------------- */
 /* Main colvars handler:
  * Send coodinates and add colvar forces to atoms. */
-void FixColvars::post_force(int /*vflag*/)
+void FixColvars::post_force(int vflag)
 {
   // some housekeeping: update status of the proxy as needed.
   if (me == 0) {
@@ -738,8 +675,7 @@ void FixColvars::post_force(int /*vflag*/)
   int tmp, ndata;
 
   if (me == 0) {
-
-    std::vector<cvm::atom_pos> &cd = *(proxy->modify_atom_positions());
+    std::vector<struct commdata> &cd = *coords;
 
     // store coordinate data
 
@@ -808,7 +744,7 @@ void FixColvars::post_force(int /*vflag*/)
       }
     }
     /* blocking receive to wait until it is our turn to send data. */
-    MPI_Recv(&tmp, 0, MPI_INT, 0, 0, world, MPI_STATUS_IGNORE);
+    MPI_Recv(&tmp, 0, MPI_INT, 0, 0, world, &status);
     MPI_Rsend(comm_buf, nme*size_one, MPI_BYTE, 0, 0, world);
   }
 
@@ -816,7 +752,7 @@ void FixColvars::post_force(int /*vflag*/)
   // call our workhorse and retrieve additional information.
   if (me == 0) {
     energy = proxy->compute();
-    store_forces = proxy->total_forces_enabled();
+    store_forces = proxy->need_system_forces();
   }
   ////////////////////////////////////////////////////////////////////////
 
@@ -827,9 +763,7 @@ void FixColvars::post_force(int /*vflag*/)
   // broadcast and apply biasing forces
 
   if (me == 0) {
-
-    std::vector<cvm::rvector> &fo = *(proxy->modify_atom_new_colvar_forces());
-
+    std::vector<struct commdata> &fo = *forces;
     double *fbuf = force_buf;
     for (int j=0; j < num_coords; ++j) {
       *fbuf++ = fo[j].x;
@@ -856,7 +790,7 @@ void FixColvars::min_post_force(int vflag)
 }
 
 /* ---------------------------------------------------------------------- */
-void FixColvars::post_force_respa(int vflag, int ilevel, int /*iloop*/)
+void FixColvars::post_force_respa(int vflag, int ilevel, int iloop)
 {
   /* only process colvar forces on the outmost RESPA level. */
   if (ilevel == nlevels_respa-1) post_force(vflag);
@@ -893,7 +827,7 @@ void FixColvars::end_of_step()
     if (me == 0) {
 
       // store old force data
-      std::vector<cvm::rvector> &of = *(proxy->modify_atom_total_forces());
+      std::vector<struct commdata> &of = *oforce;
 
       for (i=0; i<num_coords; ++i) {
         const tagint k = atom->map(taglist[i]);
@@ -941,7 +875,7 @@ void FixColvars::end_of_step()
         }
       }
       /* blocking receive to wait until it is our turn to send data. */
-      MPI_Recv(&tmp, 0, MPI_INT, 0, 0, world, MPI_STATUS_IGNORE);
+      MPI_Recv(&tmp, 0, MPI_INT, 0, 0, world, &status);
       MPI_Rsend(comm_buf, nme*size_one, MPI_BYTE, 0, 0, world);
     }
   }
@@ -954,7 +888,6 @@ void FixColvars::write_restart(FILE *fp)
   if (me == 0) {
     std::string rest_text("");
     proxy->serialize_status(rest_text);
-    // TODO call write_output_files()
     const char *cvm_state = rest_text.c_str();
     int len = strlen(cvm_state) + 1; // need to include terminating NULL byte.
     fwrite(&len,sizeof(int),1,fp);
@@ -971,15 +904,6 @@ void FixColvars::restart(char *buf)
   if (me == 0) {
     std::string rest_text(buf);
     proxy->deserialize_status(rest_text);
-  }
-}
-
-/* ---------------------------------------------------------------------- */
-
-void FixColvars::post_run()
-{
-  if (me == 0) {
-    proxy->write_output_files();
   }
 }
 
